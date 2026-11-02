@@ -21,6 +21,22 @@
     <Product>Torimaru</Product>
     <Version>0.1.1</Version>
     <InvariantGlobalization>false</InvariantGlobalization>
+
+    <!--
+      WFAC010「高 DPI 設定を app.manifest から削除して ApplicationHighDpiMode を使え」を抑制する。
+
+      これは WinForms 向けの指摘で、このアプリには当てはまらない。
+      ApplicationHighDpiMode は ApplicationConfiguration.Initialize() が
+      Application.SetHighDpiMode() を呼ぶことで効く仕組みだが、本アプリは
+      エントリポイントが App.xaml の WPF アプリで Program.Main を持たず、
+      その初期化は決して呼ばれない（＝設定しても無効なまま）。
+
+      一方 app.manifest の PerMonitorV2 は実際に効いている（起動中プロセスの
+      GetProcessDpiAwareness が PROCESS_PER_MONITOR_DPI_AWARE を返す）。
+      画面キャプチャは座標が物理ピクセルと一致していることが前提なので、
+      manifest 側の宣言こそが正しい実装。指摘どおりに消すと座標がずれる。
+    -->
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
