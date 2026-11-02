@@ -1,0 +1,18 @@
+# ビルド成果物
+bin/
+obj/
+publish/
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+
+# 配布用にまとめたもの
+*.zip
+
+# ローカルのエージェント作業用（リポジトリに入れない）
+.claude/
+*.mv2
+*.mv2.lock

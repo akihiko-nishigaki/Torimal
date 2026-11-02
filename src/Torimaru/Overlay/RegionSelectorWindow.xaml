@@ -1,0 +1,121 @@
+<Window x:Class="Torimaru.App.Overlay.RegionSelectorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="範囲選択"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual"
+        ShowInTaskbar="False"
+        Topmost="True"
+        AllowsTransparency="False"
+        Background="Black"
+        Cursor="Cross"
+        Focusable="True"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        Left="0" Top="0" Width="400" Height="300"
+        Loaded="OnLoaded"
+        MouseMove="OnMouseMove"
+        MouseLeftButtonDown="OnMouseLeftButtonDown"
+        MouseLeftButtonUp="OnMouseLeftButtonUp"
+        MouseRightButtonUp="OnMouseRightButtonUp"
+        KeyDown="OnKeyDown">
+
+  <Grid x:Name="Root" ClipToBounds="True">
+
+    <!-- 凍結した画面。NearestNeighbor で等倍表示し、にじみを防ぐ -->
+    <Image x:Name="Screenshot"
+           Stretch="Fill"
+           HorizontalAlignment="Left"
+           VerticalAlignment="Top"
+           RenderOptions.BitmapScalingMode="NearestNeighbor" />
+
+    <Canvas x:Name="Layer"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Top"
+            Background="Transparent">
+
+      <!-- 選択範囲以外を暗くする（Geometry の Exclude で穴を開ける） -->
+      <Path x:Name="Dim" Fill="#59000000" IsHitTestVisible="False" />
+
+      <!-- ウィンドウ自動検出のハイライト -->
+      <Rectangle x:Name="WindowHighlight"
+                 Stroke="#FF4FC3F7"
+                 StrokeThickness="2"
+                 Fill="#1A4FC3F7"
+                 Visibility="Collapsed"
+                 IsHitTestVisible="False" />
+
+      <!-- ドラッグ中の選択枠 -->
+      <Rectangle x:Name="SelectionBorder"
+                 Stroke="#FFE53935"
+                 StrokeThickness="1.5"
+                 Visibility="Collapsed"
+                 IsHitTestVisible="False" />
+
+      <!-- 十字線 -->
+      <Line x:Name="CrossH" Stroke="#66E53935" StrokeThickness="1" IsHitTestVisible="False" />
+      <Line x:Name="CrossV" Stroke="#66E53935" StrokeThickness="1" IsHitTestVisible="False" />
+
+      <!-- ルーペ（1 ピクセル精度での位置合わせ用） -->
+      <Border x:Name="Magnifier"
+              BorderBrush="#FFFFFFFF"
+              BorderThickness="1"
+              Background="#CC101010"
+              Visibility="Collapsed"
+              IsHitTestVisible="False">
+        <StackPanel>
+          <Grid x:Name="MagnifierViewport" ClipToBounds="True">
+            <Image x:Name="MagnifierImage"
+                   Stretch="Fill"
+                   HorizontalAlignment="Left"
+                   VerticalAlignment="Top"
+                   RenderOptions.BitmapScalingMode="NearestNeighbor" />
+            <!-- ルーペ中心のピクセルを示す枠 -->
+            <Rectangle x:Name="MagnifierCenter"
+                       Stroke="#FFE53935"
+                       StrokeThickness="1"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Center" />
+          </Grid>
+          <Border Background="#E6101010" Padding="6,3">
+            <StackPanel>
+              <TextBlock x:Name="ReadoutPosition"
+                         Foreground="White"
+                         FontFamily="Consolas"
+                         FontSize="11" />
+              <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                <Rectangle x:Name="ColorSwatch" Width="11" Height="11" Stroke="#80FFFFFF" StrokeThickness="1" />
+                <TextBlock x:Name="ReadoutColor"
+                           Foreground="#FFBDBDBD"
+                           FontFamily="Consolas"
+                           FontSize="11"
+                           Margin="5,0,0,0" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </Border>
+
+      <!-- 操作ヒント -->
+      <Border x:Name="Hint"
+              Background="#E6101010"
+              CornerRadius="4"
+              Padding="12,7"
+              IsHitTestVisible="False">
+        <StackPanel>
+          <TextBlock x:Name="HintTitle"
+                     Foreground="White"
+                     FontSize="12"
+                     FontWeight="SemiBold"
+                     Visibility="Collapsed"
+                     TextTrimming="CharacterEllipsis"
+                     MaxWidth="420"
+                     Margin="0,0,0,3" />
+          <TextBlock x:Name="HintText" Foreground="#FFE0E0E0" FontSize="11.5" />
+        </StackPanel>
+      </Border>
+
+    </Canvas>
+  </Grid>
+</Window>

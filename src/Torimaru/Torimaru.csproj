@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!--
+      Windows.Media.Ocr（OS 標準・無料の OCR）を使うため Windows SDK の
+      射影が付く TFM にしている。Windows 10 2004 以降が必要。
+    -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Torimaru.App</RootNamespace>
+    <AssemblyName>Torimaru</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>assets\app.ico</ApplicationIcon>
+    <AssemblyTitle>Torimaru</AssemblyTitle>
+    <Product>Torimaru</Product>
+    <Version>0.1.0</Version>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      UseWindowsForms が System.Windows.Forms / System.Drawing を暗黙 using に加えるため、
+      WPF の System.Windows / System.Windows.Media と Point・Size・Color・Application などが
+      全面的に衝突する。参照自体は残したまま暗黙 using だけを外し、
+      WinForms / GDI+ の型は使う場所で明示する方針にする。
+    -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+
+    <!-- 上の Remove で暗黙 using が絞られるため、必要な分は明示的に戻す -->
+    <Using Include="System.IO" />
+    <Using Include="System.Windows" />
+    <Using Include="System.Windows.Controls" />
+    <Using Include="System.Windows.Input" />
+    <Using Include="System.Windows.Media" />
+    <Using Include="System.Windows.Media.Imaging" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- QR / バーコードの解読。純マネージドなのでネイティブ DLL は増えない -->
+    <PackageReference Include="ZXing.Net" Version="0.16.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Torimaru.Core\Torimaru.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="assets\app.ico" />
+  </ItemGroup>
+
+</Project>

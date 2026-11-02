@@ -1,0 +1,162 @@
+<Window x:Class="Torimaru.App.Video.VideoToolsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="動画ツール"
+        Width="920" Height="740"
+        MinWidth="640" MinHeight="520"
+        WindowStartupLocation="CenterScreen"
+        Background="#FFFAFAFA"
+        FontFamily="Yu Gothic UI, Segoe UI"
+        FontSize="12">
+
+  <Window.Resources>
+    <Style x:Key="BarButton" TargetType="Button">
+      <Setter Property="Height" Value="28" />
+      <Setter Property="MinWidth" Value="76" />
+      <Setter Property="Margin" Value="0,0,6,0" />
+      <Setter Property="Padding" Value="10,0" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd"
+                    Background="#FFFFFFFF"
+                    BorderBrush="#FFD5D5D5"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="#FFEFF5FE" />
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Bd" Property="Background" Value="#FFF2F2F2" />
+                <Setter Property="Foreground" Value="#FFAAAAAA" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <Style x:Key="SectionLabel" TargetType="TextBlock">
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Foreground" Value="#FF333333" />
+      <Setter Property="Margin" Value="0,0,0,6" />
+    </Style>
+  </Window.Resources>
+
+  <DockPanel Margin="12">
+
+    <!-- 読み込み -->
+    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,10">
+      <Button Style="{StaticResource BarButton}" Click="OnOpenFile" Content="動画を開く" MinWidth="92" />
+      <TextBlock x:Name="FileText"
+                 Text="動画が読み込まれていません"
+                 VerticalAlignment="Center"
+                 Foreground="#FF666666"
+                 TextTrimming="CharacterEllipsis" />
+    </StackPanel>
+
+    <!-- ステータス -->
+    <Border DockPanel.Dock="Bottom"
+            Background="#FFF0F0F0"
+            BorderBrush="#FFE0E0E0"
+            BorderThickness="1"
+            CornerRadius="4"
+            Padding="10,6"
+            Margin="0,10,0,0">
+      <TextBlock x:Name="StatusText" Foreground="#FF555555" TextWrapping="Wrap" />
+    </Border>
+
+    <!-- 操作 -->
+    <StackPanel DockPanel.Dock="Bottom" Margin="0,10,0,0">
+
+      <TextBlock Style="{StaticResource SectionLabel}" Text="トリミング（一部を切り出す）" />
+      <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+        <TextBlock Text="開始" VerticalAlignment="Center" Margin="0,0,6,0" />
+        <TextBox x:Name="TrimStartBox" Width="74" Height="26" VerticalContentAlignment="Center" Text="0" />
+        <Button Style="{StaticResource BarButton}" Click="OnSetTrimStart" Content="現在位置" MinWidth="72" Margin="6,0,12,0" />
+
+        <TextBlock Text="終了" VerticalAlignment="Center" Margin="0,0,6,0" />
+        <TextBox x:Name="TrimEndBox" Width="74" Height="26" VerticalContentAlignment="Center" Text="0" />
+        <Button Style="{StaticResource BarButton}" Click="OnSetTrimEnd" Content="現在位置" MinWidth="72" Margin="6,0,12,0" />
+
+        <CheckBox x:Name="ReencodeCheck"
+                  Content="正確に切る（再エンコード）"
+                  IsChecked="True"
+                  VerticalAlignment="Center"
+                  Margin="0,0,12,0" />
+
+        <Button x:Name="TrimButton" Style="{StaticResource BarButton}" Click="OnTrim"
+                Content="切り出す" MinWidth="80" />
+      </StackPanel>
+
+      <TextBlock Style="{StaticResource SectionLabel}" Text="結合（複数の動画をつなぐ）" />
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <ListBox x:Name="ConcatList"
+                 Grid.Column="0"
+                 Height="86"
+                 BorderBrush="#FFD5D5D5"
+                 BorderThickness="1" />
+
+        <StackPanel Grid.Column="1" Margin="8,0,0,0">
+          <Button Style="{StaticResource BarButton}" Click="OnAddConcat" Content="追加" Margin="0,0,0,4" />
+          <Button Style="{StaticResource BarButton}" Click="OnRemoveConcat" Content="削除" Margin="0,0,0,4" />
+          <Button x:Name="ConcatButton" Style="{StaticResource BarButton}" Click="OnConcat" Content="結合" />
+        </StackPanel>
+      </Grid>
+    </StackPanel>
+
+    <!-- プレビュー -->
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="*" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
+
+      <Border Grid.Row="0" Background="#FF2B2B2B" CornerRadius="4">
+        <Image x:Name="Preview" Stretch="Uniform" Margin="6" />
+      </Border>
+
+      <Grid Grid.Row="1" Margin="0,10,0,0">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <Slider x:Name="PositionSlider"
+                Grid.Column="0"
+                Minimum="0"
+                Maximum="1"
+                IsEnabled="False"
+                VerticalAlignment="Center"
+                ValueChanged="OnPositionChanged" />
+
+        <TextBlock x:Name="PositionText"
+                   Grid.Column="1"
+                   Text="0.00 / 0.00 秒"
+                   VerticalAlignment="Center"
+                   Margin="10,0,0,0"
+                   FontFamily="Consolas"
+                   Foreground="#FF555555" />
+      </Grid>
+
+      <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
+        <Button Style="{StaticResource BarButton}" Click="OnStepBack" Content="◀ 1秒" MinWidth="62" />
+        <Button Style="{StaticResource BarButton}" Click="OnStepForward" Content="1秒 ▶" MinWidth="62" />
+        <Button x:Name="SaveFrameButton" Style="{StaticResource BarButton}" Click="OnSaveFrame"
+                Content="このフレームを保存して編集" MinWidth="168" />
+      </StackPanel>
+    </Grid>
+
+  </DockPanel>
+</Window>
