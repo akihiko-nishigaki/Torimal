@@ -409,7 +409,7 @@ public static class ShapeRenderer
             (shape.TailX - bounds.X) * scale,
             (shape.TailY - bounds.Y) * scale);
 
-        var tail = BuildTail(body, width, height, tip, scale);
+        var tail = BuildTail(geometry, body, width, height, tip, scale);
         if (tail is not null)
         {
             geometry = Geometry.Combine(geometry, tail, GeometryCombineMode.Union, null);
@@ -488,7 +488,7 @@ public static class ShapeRenderer
     /// 先端をどこへ動かしても正しい辺から生える。
     /// </summary>
     private static Geometry? BuildTail(
-        string body, double width, double height, Point tip, double scale)
+        Geometry bodyGeometry, string body, double width, double height, Point tip, double scale)
     {
         // 文字を入力している最中の吹き出しはまだ大きさが決まっていない（0 x 0）。
         // その状態で付け根の幅を計算すると下限が上限を上回るので、しっぽは描かない。
@@ -521,36 +521,93 @@ public static class ShapeRenderer
             return null;
         }
 
-        // 少し内側に寄せて、本体と確実に重ねる（隙間を作らない）。
-        // 楕円は縁が曲がっているぶん、付け根をさらに内側へ入れる。
-        var inset = isOval ? 0.78 : 0.9;
-        var baseCenter = new Point(
-            center.X + (dx * toEdge * inset),
-            center.Y + (dy * toEdge * inset));
-
         // 根元の幅。先端を遠くへ伸ばすほど広げないと針のように細く見えるが、
-        // 本体より太くなっても不格好なので本体サイズで頭打ちにする。
-        var shorterSide = Math.Min(width, height);
-        var minHalf = Math.Max(5 * scale, shorterSide * 0.18);
-        var maxHalf = Math.Max(minHalf, shorterSide * 0.45);
+        // 広すぎると吹き出しではなく「旗つきの矢印」になってしまう。
+        //
+        // 上限は本体の短辺ではなく、しっぽが生える辺の長さ（＝しっぽと直角の
+        // 向きに本体を横切る長さ）で決める。短辺で決めると、横向きのしっぽが
+        // 高さいっぱいまで広がって本体の片側を食いつぶす。
+        var perpHalf = isOval
+            ? EllipseEdgeDistance(width / 2, height / 2, -dy, dx)
+            : RectEdgeDistance(width / 2, height / 2, -dy, dx);
+
+        var maxHalf = Math.Max(3 * scale, perpHalf * 0.42);
+        var minHalf = Math.Min(maxHalf, Math.Max(4 * scale, perpHalf * 0.22));
         var half = Math.Clamp(length * 0.16, minHalf, maxHalf);
-        var offsetX = -dy * half;
-        var offsetY = dx * half;
+
+        // 付け根は「本体の中心から見た角度」で縁の上に 2 点取る。
+        //
+        // 「縁まで進んでから直角方向へずらす」方式だと、斜めに引いたときに
+        // ずらした先が本体の外へ出てしまい、しっぽが本体から切り離されて
+        // 見える（＝針が刺さったような形。しっぽを伸ばすほど悪化する）。
+        // 角度で取れば 2 点とも必ず縁の上に乗るので、どの向きでも縁から生える。
+        var angle = Math.Atan2(dy, dx);
+        var spread = Math.Clamp(Math.Atan2(half, Math.Max(toEdge, 1)), 0.03, 1.0);
+
+        var start = center;
+        var end = center;
+
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            start = EdgeAnchor(bodyGeometry, center, width, height, isOval, angle - spread);
+            end = EdgeAnchor(bodyGeometry, center, width, height, isOval, angle + spread);
+
+            // 平たい本体を斜めに引くと、同じ角度でも縁までの距離が左右で大きく
+            // 違い、付け根だけが間延びする。狙った幅に収まるまで角度を狭める。
+            var spanX = start.X - end.X;
+            var spanY = start.Y - end.Y;
+
+            if (Math.Sqrt((spanX * spanX) + (spanY * spanY)) <= half * 2.2 || spread <= 0.04)
+            {
+                break;
+            }
+
+            spread *= 0.7;
+        }
 
         var figure = new PathFigure
         {
-            StartPoint = new Point(baseCenter.X + offsetX, baseCenter.Y + offsetY),
+            StartPoint = start,
             IsClosed = true,
             IsFilled = true,
         };
 
         figure.Segments.Add(new LineSegment(tip, isStroked: true));
-        figure.Segments.Add(
-            new LineSegment(new Point(baseCenter.X - offsetX, baseCenter.Y - offsetY), isStroked: true));
+        figure.Segments.Add(new LineSegment(end, isStroked: true));
 
         var path = new PathGeometry();
         path.Figures.Add(figure);
         return path;
+    }
+
+    /// <summary>
+    /// 中心から指定の角度へ進み、本体の縁のすぐ内側に点を置く。
+    /// 角丸や楕円では計算上の縁より実際の輪郭が内側にあるので、
+    /// 本当に本体の中に入るまで少しずつ中心側へ戻す。
+    /// </summary>
+    private static Point EdgeAnchor(
+        Geometry bodyGeometry, Point center, double width, double height, bool isOval, double angle)
+    {
+        var ux = Math.Cos(angle);
+        var uy = Math.Sin(angle);
+
+        var edge = isOval
+            ? EllipseEdgeDistance(width / 2, height / 2, ux, uy)
+            : RectEdgeDistance(width / 2, height / 2, ux, uy);
+
+        for (var inset = 0.94; inset > 0.1; inset -= 0.06)
+        {
+            var point = new Point(
+                center.X + (ux * edge * inset),
+                center.Y + (uy * edge * inset));
+
+            if (bodyGeometry.FillContains(point))
+            {
+                return point;
+            }
+        }
+
+        return center;
     }
 
     /// <summary>番号付きマーカー（手順書で多用するのでステップ専用ツールにしている）。</summary>

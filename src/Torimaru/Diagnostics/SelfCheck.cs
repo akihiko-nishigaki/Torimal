@@ -421,6 +421,44 @@ public static class SelfCheck
             return diff > 200;
         });
 
+        Check("しっぽは根元から先へ細くなる（縁の外で太くなる「返し」ができない）", () =>
+        {
+            // 付け根の両端を本体の外に置いてしまうと、縁のすぐ下でいったん幅が
+            // 広がり、釣り針の「返し」のような形になる（＝しっぽが本体から
+            // 切り離されて見える）。横長の本体から斜め下へ出すと必ず再現した。
+            var shape = MakeCallout(85, 146);
+            shape.X = 60;
+            shape.Y = 60;
+            shape.Width = 116;
+            shape.Height = 47;
+
+            // 本体の下端は Y+Height = 107。縁を出た直後から測らないと、
+            // 「返し」の一番太いところ（縁の 1〜3 px 下）を跨いでしまう。
+            var widths = RowInkWidths(DrawOnly(shape), 108, 140);
+
+            var worst = 0;
+            for (var i = 1; i < widths.Count; i++)
+            {
+                worst = Math.Max(worst, widths[i] - widths[i - 1]);
+            }
+
+            report.AppendLine(
+                $"       縁の下の幅: {string.Join(" ", widths.Take(10))} … / 最大の増加: {worst} px");
+
+            return widths.Count == 33 && widths[0] > 4 && worst <= 1;
+        });
+
+        Check("横向きのしっぽが本体の高さを食いつぶさない", () =>
+        {
+            // 根元の幅を本体の短辺で決めると、横向きのしっぽが高さいっぱいに
+            // 広がって「旗つきの矢印」になる。生える辺の長さで決めること。
+            var shape = MakeCallout(20, 82); // 本体の左へ水平に伸ばす
+            var rooted = ColumnInkHeight(DrawOnly(shape), (int)shape.X - 4);
+
+            report.AppendLine($"       根元の縦幅: {rooted} px / 本体の高さ: {shape.Height:0} px");
+            return rooted > 4 && rooted <= shape.Height * 0.45;
+        });
+
         Check("先端を本体の中に置くとしっぽが出ない", () =>
         {
             var inside = MakeCallout(120, 80);   // 本体の内側
@@ -1077,6 +1115,68 @@ public static class SelfCheck
         }
 
         return maxX < minX ? 0 : maxX - minX + 1;
+    }
+
+    /// <summary>行ごとの「色のついた画素」の横幅（吹き出しのしっぽの太さを測る）。</summary>
+    private static List<int> RowInkWidths(
+        System.Windows.Media.Imaging.BitmapSource image, int fromY, int toY)
+    {
+        var pixels = ToBgra(image);
+        var widths = new List<int>();
+
+        for (var y = fromY; y <= toY && y < image.PixelHeight; y++)
+        {
+            var minX = int.MaxValue;
+            var maxX = int.MinValue;
+
+            for (var x = 0; x < image.PixelWidth; x++)
+            {
+                if (IsColoured(pixels, ((y * image.PixelWidth) + x) * 4))
+                {
+                    minX = Math.Min(minX, x);
+                    maxX = Math.Max(maxX, x);
+                }
+            }
+
+            widths.Add(maxX < minX ? 0 : maxX - minX + 1);
+        }
+
+        return widths;
+    }
+
+    /// <summary>ある列の「色のついた画素」の縦幅。</summary>
+    private static int ColumnInkHeight(
+        System.Windows.Media.Imaging.BitmapSource image, int x)
+    {
+        var pixels = ToBgra(image);
+        var minY = int.MaxValue;
+        var maxY = int.MinValue;
+
+        for (var y = 0; y < image.PixelHeight; y++)
+        {
+            if (IsColoured(pixels, ((y * image.PixelWidth) + x) * 4))
+            {
+                minY = Math.Min(minY, y);
+                maxY = Math.Max(maxY, y);
+            }
+        }
+
+        return maxY < minY ? 0 : maxY - minY + 1;
+    }
+
+    /// <summary>
+    /// 白い下地・白い縁取り・灰色の影と区別するため、
+    /// 「彩度のある画素」だけを図形とみなす。
+    /// </summary>
+    private static bool IsColoured(byte[] pixels, int index)
+    {
+        var b = pixels[index];
+        var g = pixels[index + 1];
+        var r = pixels[index + 2];
+
+        var max = Math.Max(r, Math.Max(g, b));
+        var min = Math.Min(r, Math.Min(g, b));
+        return max - min > 60;
     }
 
     private static int CountDifferingPixels(
