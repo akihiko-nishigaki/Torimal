@@ -19,7 +19,7 @@
     <ApplicationIcon>assets\app.ico</ApplicationIcon>
     <AssemblyTitle>Torimaru</AssemblyTitle>
     <Product>Torimaru</Product>
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <InvariantGlobalization>false</InvariantGlobalization>
 
     <!--
