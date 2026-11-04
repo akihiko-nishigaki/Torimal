@@ -20,6 +20,9 @@ internal static class Program
         SettingsTests(t);
         RawImageTests(t);
         ScrollStitcherTests(t);
+        HotKeyTests(t);
+        ImageSurgeryTests(t);
+        AnnotationTransformTests(t);
 
         return t.Report();
     }
@@ -1041,6 +1044,552 @@ internal static class Program
         }
 
         return types;
+    }
+
+    // ================================================================ ホットキー
+
+    private static void HotKeyTests(TestRunner t)
+    {
+        t.Section("ホットキーの割り当て");
+
+        t.Case("キー文字列を解釈して同じ文字列に戻せる", () =>
+        {
+            foreach (var text in new[]
+                     {
+                         "Ctrl+Shift+S", "PrintScreen", "Ctrl+Alt+F12",
+                         "Ctrl+Shift+Alt+Win+Num7", "Shift+Delete", "Alt+Minus",
+                     })
+            {
+                TestRunner.True(HotKeySpec.TryParse(text, out var spec), $"解釈: {text}");
+                TestRunner.Equal(text, spec.ToString(), $"往復: {text}");
+            }
+        });
+
+        t.Case("書き方のゆらぎを吸収して正規化する", () =>
+        {
+            TestRunner.True(HotKeySpec.TryParse("ctrl + shift + s", out var lower), "小文字と空白");
+            TestRunner.Equal("Ctrl+Shift+S", lower.ToString(), "正規化");
+
+            TestRunner.True(HotKeySpec.TryParse("CONTROL+Esc", out var alias), "別名 Control / Esc");
+            TestRunner.Equal("Ctrl+Escape", alias.ToString(), "正規化");
+
+            TestRunner.True(HotKeySpec.TryParse("Windows+Shift+PrtScn", out var win), "別名 Windows / PrtScn");
+            TestRunner.Equal("Shift+Win+PrintScreen", win.ToString(), "修飾キーの並びも揃う");
+        });
+
+        t.Case("解釈できない指定は拒否する（例外は投げない）", () =>
+        {
+            foreach (var text in new string?[] { null, "", "   ", "Ctrl", "Ctrl+Shift", "Ctrl+A+B", "Ctrl+Nope" })
+            {
+                TestRunner.True(!HotKeySpec.TryParse(text, out _), $"拒否: <{text}>");
+            }
+        });
+
+        t.Case("修飾キー無しの文字キーは使わせない", () =>
+        {
+            // 単独で奪うと、どのアプリでもその文字が打てなくなる
+            TestRunner.NotNull(
+                new HotKeySpec(HotKeyModifiers.None, 'S').Validate(), "S 単独は理由付きで拒否");
+            TestRunner.NotNull(
+                new HotKeySpec(HotKeyModifiers.None, HotKeySpec.VkF1).Validate(), "F1 単独も拒否");
+
+            // 文字入力に使わないキーは単独でも許す（既定の PrintScreen がこれ）
+            TestRunner.Null(
+                new HotKeySpec(HotKeyModifiers.None, HotKeySpec.VkSnapshot).Validate(), "PrintScreen 単独");
+            TestRunner.Null(
+                new HotKeySpec(HotKeyModifiers.None, HotKeySpec.VkF13).Validate(), "F13 単独");
+
+            TestRunner.Null(
+                new HotKeySpec(HotKeyModifiers.Control | HotKeyModifiers.Shift, 'S').Validate(),
+                "Ctrl+Shift+S は使える");
+        });
+
+        t.Case("修飾キーそのものは割り当てられない", () =>
+        {
+            foreach (var vk in new[] { 0x10, 0x11, 0x12, 0x5B, 0xA2, 0xA3 })
+            {
+                TestRunner.True(HotKeySpec.IsModifierKey(vk), $"修飾キー判定: 0x{vk:X2}");
+                TestRunner.NotNull(
+                    new HotKeySpec(HotKeyModifiers.Control, vk).Validate(), $"拒否: 0x{vk:X2}");
+            }
+        });
+
+        t.Case("既定のキー候補はすべて解釈でき、組み合わせとして成立する", () =>
+        {
+            foreach (var action in HotKeyActions.All)
+            {
+                var specs = action.DefaultSpecs();
+                TestRunner.Equal(
+                    action.DefaultKeys.Length, specs.Count, $"{action.DisplayName}: 候補が全部読めた");
+
+                foreach (var spec in specs)
+                {
+                    TestRunner.Null(spec.Validate(), $"{action.DisplayName}: {spec} は成立する");
+                }
+            }
+        });
+
+        t.Case("操作の Id と表示名は重複していない", () =>
+        {
+            var ids = HotKeyActions.All.Select(a => a.Id).Distinct().Count();
+            var names = HotKeyActions.All.Select(a => a.DisplayName).Distinct().Count();
+
+            TestRunner.Equal(HotKeyActions.All.Length, ids, "Id");
+            TestRunner.Equal(HotKeyActions.All.Length, names, "表示名（トレイメニューの照合に使う）");
+        });
+
+        t.Case("Id から操作を引ける", () =>
+        {
+            TestRunner.NotNull(HotKeyActions.Find("CaptureRegion"), "既知の Id");
+            TestRunner.Null(HotKeyActions.Find("NoSuchAction"), "知らない Id");
+            TestRunner.Null(HotKeyActions.Find(null), "null");
+        });
+
+        var temp = Path.Combine(Path.GetTempPath(), "TorimaruSelfTest", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+
+        try
+        {
+            t.Case("割り当てを保存して読み戻せる", () =>
+            {
+                var path = Path.Combine(temp, "hotkeys.json");
+                var settings = new AppSettings();
+                settings.SetHotKey(
+                    HotKeyActions.CaptureRegion.Id,
+                    new HotKeySpec(HotKeyModifiers.Control | HotKeyModifiers.Alt, 'Q'));
+                settings.Save(path);
+
+                var loaded = AppSettings.Load(path);
+                TestRunner.Equal(
+                    "Ctrl+Alt+Q",
+                    loaded.FindHotKey(HotKeyActions.CaptureRegion.Id)?.ToString(),
+                    "読み戻した割り当て");
+
+                TestRunner.Null(
+                    loaded.FindHotKey(HotKeyActions.PickColor.Id), "設定していない操作は未設定のまま");
+            });
+
+            t.Case("既定に戻すと割り当てが消える", () =>
+            {
+                var settings = new AppSettings();
+                settings.SetHotKey(HotKeyActions.ShowWorkspace.Id, new HotKeySpec(HotKeyModifiers.Win, 'J'));
+                TestRunner.NotNull(settings.FindHotKey(HotKeyActions.ShowWorkspace.Id), "割り当て済み");
+
+                settings.SetHotKey(HotKeyActions.ShowWorkspace.Id, null);
+                TestRunner.Null(settings.FindHotKey(HotKeyActions.ShowWorkspace.Id), "消えている");
+                TestRunner.Equal(0, settings.HotKeys.Count, "設定ファイルにも残らない");
+            });
+
+            t.Case("成立しない割り当ては読み込み時に捨てる", () =>
+            {
+                // 手で設定ファイルを書き換えても、効かない指定が黙って残らないこと
+                var path = Path.Combine(temp, "broken-hotkeys.json");
+                File.WriteAllText(
+                    path,
+                    """
+                    {
+                      "HotKeys": {
+                        "CaptureRegion": "S",
+                        "NoSuchAction": "Ctrl+Shift+J",
+                        "PickColor": "Ctrl+Nope",
+                        "ShowWorkspace": "ctrl+alt+k"
+                      }
+                    }
+                    """);
+
+                var loaded = AppSettings.Load(path);
+
+                TestRunner.Null(loaded.FindHotKey("CaptureRegion"), "修飾キー無しの S は捨てる");
+                TestRunner.Null(loaded.FindHotKey("PickColor"), "読めないキー名は捨てる");
+                TestRunner.True(!loaded.HotKeys.ContainsKey("NoSuchAction"), "知らない操作名は捨てる");
+                TestRunner.Equal(
+                    "Ctrl+Alt+K",
+                    loaded.FindHotKey("ShowWorkspace")?.ToString(),
+                    "正しい指定は正規化して残す");
+            });
+
+            t.Case("HotKeys が null でも落ちない", () =>
+            {
+                var path = Path.Combine(temp, "null-hotkeys.json");
+                File.WriteAllText(path, """{ "HotKeys": null }""");
+
+                var loaded = AppSettings.Load(path);
+                TestRunner.NotNull(loaded.HotKeys, "空の辞書になる");
+                TestRunner.Equal(0, loaded.HotKeys.Count, "中身は空");
+            });
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(temp, recursive: true);
+            }
+            catch (IOException)
+            {
+                // 後片付けの失敗でテストを落とさない
+            }
+        }
+    }
+
+    // ================================================================ 画像を切る
+
+    private static void ImageSurgeryTests(TestRunner t)
+    {
+        t.Section("トリミングと中抜き（画像）");
+
+        t.Case("Crop は指定範囲だけを残す", () =>
+        {
+            var cropped = ImageSurgery.Crop(BuildGrid(40, 30), 10, 5, 8, 6);
+
+            TestRunner.Equal(8, cropped.Width, "幅");
+            TestRunner.Equal(6, cropped.Height, "高さ");
+            TestRunner.Equal((10, 5), PixelAt(cropped, 0, 0), "左上は元の (10,5)");
+            TestRunner.Equal((17, 10), PixelAt(cropped, 7, 5), "右下は元の (17,10)");
+        });
+
+        t.Case("RemoveRows は帯を抜いて上下をそのまま繋ぐ", () =>
+        {
+            var cut = ImageSurgery.RemoveRows(BuildGrid(40, 30), 10, 5);
+
+            TestRunner.Equal(40, cut.Width, "幅は変わらない");
+            TestRunner.Equal(25, cut.Height, "5 行減る");
+            TestRunner.Equal((3, 9), PixelAt(cut, 3, 9), "継ぎ目の上は元のまま");
+            TestRunner.Equal((3, 15), PixelAt(cut, 3, 10), "継ぎ目の下は元の 15 行目");
+            TestRunner.Equal((3, 29), PixelAt(cut, 3, 24), "最後は元の最終行");
+        });
+
+        t.Case("RemoveColumns は帯を抜いて左右をそのまま繋ぐ", () =>
+        {
+            var cut = ImageSurgery.RemoveColumns(BuildGrid(40, 30), 10, 5);
+
+            TestRunner.Equal(35, cut.Width, "5 列減る");
+            TestRunner.Equal(30, cut.Height, "高さは変わらない");
+            TestRunner.Equal((9, 7), PixelAt(cut, 9, 7), "継ぎ目の左は元のまま");
+            TestRunner.Equal((15, 7), PixelAt(cut, 10, 7), "継ぎ目の右は元の 15 列目");
+            TestRunner.Equal((39, 7), PixelAt(cut, 34, 7), "最後は元の最終列");
+        });
+
+        t.Case("端の帯も抜ける", () =>
+        {
+            var top = ImageSurgery.RemoveRows(BuildGrid(40, 30), 0, 4);
+            TestRunner.Equal(26, top.Height, "先頭 4 行を抜いた高さ");
+            TestRunner.Equal((0, 4), PixelAt(top, 0, 0), "先頭は元の 4 行目");
+
+            var bottom = ImageSurgery.RemoveRows(BuildGrid(40, 30), 26, 4);
+            TestRunner.Equal(26, bottom.Height, "末尾 4 行を抜いた高さ");
+            TestRunner.Equal((0, 25), PixelAt(bottom, 0, 25), "末尾は元の 25 行目");
+        });
+
+        t.Case("ドラッグした範囲は端のピクセルまで含めて切る", () =>
+        {
+            // 10.4 〜 25.6 をなぞったら 10〜26 を切る（内側に丸めると 1px 残る）
+            TestRunner.True(
+                ImageCutPlan.TryPlanBand(25.6, 10.4, 300, out var start, out var count, out var problem),
+                "受け付けられる");
+
+            TestRunner.Null(problem, "理由は出ない");
+            TestRunner.Equal(10, start, "開始");
+            TestRunner.Equal(16, count, "太さ");
+        });
+
+        t.Case("細すぎる帯・残りが無くなる帯は受け付けない", () =>
+        {
+            TestRunner.True(
+                !ImageCutPlan.TryPlanBand(100, 101, 300, out _, out _, out var thin), "1 px の帯");
+            TestRunner.NotNull(thin, "細すぎる理由を返す");
+
+            TestRunner.True(
+                !ImageCutPlan.TryPlanBand(0, 300, 300, out _, out _, out var everything), "全部抜く");
+            TestRunner.NotNull(everything, "残らない理由を返す");
+
+            TestRunner.True(
+                !ImageCutPlan.TryPlanBand(5, 299, 300, out _, out _, out var almost), "残り 6 px");
+            TestRunner.NotNull(almost, "残りが足りない理由を返す");
+        });
+
+        t.Case("画像の外へはみ出すドラッグは画像の中へ収める", () =>
+        {
+            TestRunner.True(
+                ImageCutPlan.TryPlanBand(-50, 40, 300, out var start, out var count, out _), "左へはみ出す");
+            TestRunner.Equal(0, start, "0 から");
+            TestRunner.Equal(40, count, "はみ出した分は数えない");
+
+            // 左右へはみ出したドラッグ。幅は画像いっぱいになり、高さだけ切られる
+            TestRunner.True(
+                ImageCutPlan.TryPlanCrop(
+                    new PixelRect(-20, 50, 500, 100), 300, 200, out var crop, out _),
+                "左右へはみ出す");
+
+            TestRunner.Equal((0, 50, 300, 100), crop, "はみ出した分は画像の縁で止まる");
+
+            // 四方へはみ出すと結果が画像全体になるので、切るものが無い
+            TestRunner.True(
+                !ImageCutPlan.TryPlanCrop(
+                    new PixelRect(-20, -20, 500, 500), 300, 200, out _, out var whole),
+                "全方向へはみ出すと画像全体になる");
+
+            TestRunner.NotNull(whole, "何も切らない理由を返す");
+        });
+
+        t.Case("トリミングの範囲は整数へ外側に丸める", () =>
+        {
+            TestRunner.True(
+                ImageCutPlan.TryPlanCrop(
+                    new PixelRect(10.7, 20.2, 100.1, 50.9), 300, 200, out var crop, out _),
+                "受け付けられる");
+
+            // 10.7〜110.8 → 10〜111（幅 101）、20.2〜71.1 → 20〜72（高さ 52）
+            TestRunner.Equal((10, 20, 101, 52), crop, "外側に丸める");
+        });
+
+        t.Case("小さすぎるトリミングと画像全体のトリミングは受け付けない", () =>
+        {
+            TestRunner.True(
+                !ImageCutPlan.TryPlanCrop(new PixelRect(10, 10, 4, 100), 300, 200, out _, out var small),
+                "幅 4 px");
+            TestRunner.NotNull(small, "小さすぎる理由を返す");
+
+            TestRunner.True(
+                !ImageCutPlan.TryPlanCrop(new PixelRect(0, 0, 300, 200), 300, 200, out _, out var whole),
+                "画像全体");
+            TestRunner.NotNull(whole, "何も切らない理由を返す");
+        });
+
+        t.Case("受け付けた帯はそのまま画像を切れる値になっている", () =>
+        {
+            // 計画と実行で条件がずれていると、受け付けた直後に例外で落ちる
+            var image = BuildGrid(40, 30);
+
+            foreach (var (a, b) in new[] { (0.0, 5.0), (3.4, 9.6), (25.0, 29.9), (0.0, 21.0) })
+            {
+                if (ImageCutPlan.TryPlanBand(a, b, image.Height, out var start, out var count, out _))
+                {
+                    var cut = ImageSurgery.RemoveRows(image, start, count);
+                    TestRunner.Equal(image.Height - count, cut.Height, $"({a}, {b}) の高さ");
+                }
+            }
+
+            foreach (var rect in new[]
+                     {
+                         new PixelRect(0, 0, 20, 20),
+                         new PixelRect(10.5, 5.5, 25.2, 20.1),
+                         new PixelRect(-5, -5, 60, 60),
+                     })
+            {
+                if (ImageCutPlan.TryPlanCrop(rect, image.Width, image.Height, out var crop, out _))
+                {
+                    var cropped = ImageSurgery.Crop(image, crop.X, crop.Y, crop.Width, crop.Height);
+                    TestRunner.Equal(crop.Width, cropped.Width, $"{rect} の幅");
+                }
+            }
+        });
+
+        t.Case("無理な指定は例外になる（画像を壊さない）", () =>
+        {
+            var image = BuildGrid(40, 30);
+
+            TestRunner.Throws<ArgumentOutOfRangeException>(
+                () => ImageSurgery.Crop(image, 35, 0, 10, 10), "はみ出すトリミング");
+            TestRunner.Throws<ArgumentOutOfRangeException>(
+                () => ImageSurgery.Crop(image, 0, 0, 0, 10), "幅 0 のトリミング");
+            TestRunner.Throws<ArgumentOutOfRangeException>(
+                () => ImageSurgery.RemoveRows(image, 0, 30), "全部の行を抜く");
+            TestRunner.Throws<ArgumentOutOfRangeException>(
+                () => ImageSurgery.RemoveRows(image, 28, 5), "はみ出す帯");
+            TestRunner.Throws<ArgumentOutOfRangeException>(
+                () => ImageSurgery.RemoveRows(image, 5, 0), "太さ 0 の帯");
+            TestRunner.Throws<ArgumentOutOfRangeException>(
+                () => ImageSurgery.RemoveColumns(image, 0, 40), "全部の列を抜く");
+        });
+    }
+
+    /// <summary>行と列が色から分かるテスト用の画像（寸法は 256 未満にすること）。</summary>
+    private static RawImage BuildGrid(int width, int height)
+    {
+        var image = RawImage.Create(width, height);
+
+        for (var y = 0; y < height; y++)
+        {
+            for (var x = 0; x < width; x++)
+            {
+                var i = (y * image.Stride) + (x * RawImage.BytesPerPixel);
+                image.Pixels[i] = (byte)x;
+                image.Pixels[i + 1] = (byte)y;
+                image.Pixels[i + 2] = 0;
+                image.Pixels[i + 3] = 255;
+            }
+        }
+
+        return image;
+    }
+
+    /// <summary>その画素が元画像のどの (列, 行) から来たかを読み取る。</summary>
+    private static (int X, int Y) PixelAt(RawImage image, int x, int y)
+    {
+        var i = (y * image.Stride) + (x * RawImage.BytesPerPixel);
+        return (image.Pixels[i], image.Pixels[i + 1]);
+    }
+
+    // ================================================================ 注釈の付け替え
+
+    private static void AnnotationTransformTests(TestRunner t)
+    {
+        t.Section("トリミングと中抜き（注釈の付け替え）");
+
+        static AnnotationDocument DocumentWith(params AnnotationShape[] shapes)
+            => new() { Shapes = [.. shapes] };
+
+        static AnnotationShape Box(double x, double y, double w, double h)
+            => new() { Kind = ShapeKind.Rectangle, X = x, Y = y, Width = w, Height = h };
+
+        t.Case("トリミングすると図形が切った分だけ寄る", () =>
+        {
+            var result = AnnotationTransform.Crop(
+                DocumentWith(Box(100, 50, 40, 20)), new PixelRect(80, 30, 200, 100));
+
+            TestRunner.Equal(1, result.Shapes.Count, "残る図形");
+            TestRunner.Near(20, result.Shapes[0].X, 0.001, "X");
+            TestRunner.Near(20, result.Shapes[0].Y, 0.001, "Y");
+            TestRunner.Near(40, result.Shapes[0].Width, 0.001, "幅は変わらない");
+        });
+
+        t.Case("トリミング範囲に掛からない図形は落とす", () =>
+        {
+            var result = AnnotationTransform.Crop(
+                DocumentWith(Box(10, 10, 20, 20)), new PixelRect(100, 100, 50, 50));
+
+            TestRunner.Equal(0, result.Shapes.Count, "範囲外は消える");
+        });
+
+        t.Case("トリミング範囲に半分掛かる図形は残す（描画で切られる）", () =>
+        {
+            var result = AnnotationTransform.Crop(
+                DocumentWith(Box(90, 90, 40, 40)), new PixelRect(100, 100, 50, 50));
+
+            TestRunner.Equal(1, result.Shapes.Count, "残る");
+            TestRunner.Near(-10, result.Shapes[0].X, 0.001, "範囲の外へ出る座標になる");
+        });
+
+        t.Case("吹き出しはしっぽも一緒に寄る", () =>
+        {
+            var callout = new AnnotationShape
+            {
+                Kind = ShapeKind.Callout,
+                X = 200, Y = 100, Width = 120, Height = 40,
+                TailX = 240, TailY = 180,
+            };
+
+            var result = AnnotationTransform.Crop(DocumentWith(callout), new PixelRect(50, 20, 400, 300));
+
+            TestRunner.Near(150, result.Shapes[0].X, 0.001, "本体 X");
+            TestRunner.Near(80, result.Shapes[0].Y, 0.001, "本体 Y");
+            TestRunner.Near(190, result.Shapes[0].TailX, 0.001, "しっぽ X");
+            TestRunner.Near(160, result.Shapes[0].TailY, 0.001, "しっぽ Y");
+        });
+
+        t.Case("元の注釈は書き換えない（元に戻せるようにする）", () =>
+        {
+            var source = DocumentWith(Box(100, 50, 40, 20));
+            AnnotationTransform.Crop(source, new PixelRect(80, 30, 200, 100));
+
+            TestRunner.Near(100, source.Shapes[0].X, 0.001, "呼び出し元の図形はそのまま");
+        });
+
+        // 以降は 60〜100 px の帯（太さ 40）を抜く
+        t.Case("帯より下の図形は帯の分だけ上へ詰まる", () =>
+        {
+            var result = AnnotationTransform.RemoveRows(DocumentWith(Box(10, 200, 30, 20)), 60, 40);
+
+            TestRunner.Equal(1, result.Shapes.Count, "残る");
+            TestRunner.Near(160, result.Shapes[0].Y, 0.001, "200 - 40");
+            TestRunner.Near(20, result.Shapes[0].Height, 0.001, "高さは変わらない");
+        });
+
+        t.Case("帯より上の図形は動かない", () =>
+        {
+            var result = AnnotationTransform.RemoveRows(DocumentWith(Box(10, 10, 30, 20)), 60, 40);
+            TestRunner.Near(10, result.Shapes[0].Y, 0.001, "Y");
+        });
+
+        t.Case("帯をまたぐ枠は消えた分だけ縮む", () =>
+        {
+            // 40〜140 の枠から 60〜100 が消えるので 40〜100（高さ 60）になる
+            var result = AnnotationTransform.RemoveRows(DocumentWith(Box(10, 40, 30, 100)), 60, 40);
+
+            TestRunner.Equal(1, result.Shapes.Count, "残る");
+            TestRunner.Near(40, result.Shapes[0].Y, 0.001, "上端は動かない");
+            TestRunner.Near(60, result.Shapes[0].Height, 0.001, "高さが 40 px 縮む");
+        });
+
+        t.Case("帯の中にしか無い枠は消える", () =>
+        {
+            var result = AnnotationTransform.RemoveRows(DocumentWith(Box(10, 65, 30, 20)), 60, 40);
+            TestRunner.Equal(0, result.Shapes.Count, "潰れた枠は残さない");
+        });
+
+        t.Case("矢印は向きを保ったまま詰まる", () =>
+        {
+            // (10,200) から (40,50) への右上向き矢印。100〜130 の帯を抜く。
+            var arrow = new AnnotationShape
+            {
+                Kind = ShapeKind.Arrow, X = 10, Y = 200, Width = 30, Height = -150,
+            };
+
+            var result = AnnotationTransform.RemoveRows(DocumentWith(arrow), 100, 30);
+
+            TestRunner.Equal(1, result.Shapes.Count, "残る");
+            TestRunner.Near(170, result.Shapes[0].Y, 0.001, "始点 200 - 30");
+            TestRunner.Near(-120, result.Shapes[0].Height, 0.001, "終点 50 は動かないので差分が縮む");
+        });
+
+        t.Case("文字は置いた点が消えると一緒に消える", () =>
+        {
+            var inside = new AnnotationShape
+            {
+                Kind = ShapeKind.Text, X = 10, Y = 70, Width = 100, Height = 30, Text = "消える",
+            };
+
+            var below = new AnnotationShape
+            {
+                Kind = ShapeKind.Text, X = 10, Y = 150, Width = 100, Height = 30, Text = "残る",
+            };
+
+            var result = AnnotationTransform.RemoveRows(DocumentWith(inside, below), 60, 40);
+
+            TestRunner.Equal(1, result.Shapes.Count, "帯の中の文字だけ消える");
+            TestRunner.Equal("残る", result.Shapes[0].Text, "残ったのは下の文字");
+            TestRunner.Near(110, result.Shapes[0].Y, 0.001, "150 - 40");
+            TestRunner.Near(30, result.Shapes[0].Height, 0.001, "文字の高さは縮めない");
+        });
+
+        t.Case("吹き出しのしっぽが帯の中なら継ぎ目に寄る", () =>
+        {
+            var callout = new AnnotationShape
+            {
+                Kind = ShapeKind.Callout,
+                X = 10, Y = 20, Width = 120, Height = 40,
+                TailX = 50, TailY = 80,
+            };
+
+            var result = AnnotationTransform.RemoveRows(DocumentWith(callout), 60, 40);
+
+            TestRunner.Near(20, result.Shapes[0].Y, 0.001, "本体は動かない");
+            TestRunner.Near(60, result.Shapes[0].TailY, 0.001, "しっぽは継ぎ目へ");
+        });
+
+        t.Case("横の中抜きも同じように詰まる", () =>
+        {
+            var result = AnnotationTransform.RemoveColumns(DocumentWith(Box(200, 10, 30, 20)), 50, 30);
+
+            TestRunner.Near(170, result.Shapes[0].X, 0.001, "200 - 30");
+            TestRunner.Near(10, result.Shapes[0].Y, 0.001, "Y は変わらない");
+        });
+
+        t.Case("太さ 0 の帯では何も変わらない", () =>
+        {
+            var result = AnnotationTransform.RemoveRows(DocumentWith(Box(10, 200, 30, 20)), 60, 0);
+            TestRunner.Near(200, result.Shapes[0].Y, 0.001, "Y");
+        });
     }
 
     private static uint Crc32(byte[] buffer)

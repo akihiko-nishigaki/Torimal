@@ -82,50 +82,25 @@ public partial class App : Application
         SetupHotKeys();
     }
 
+    /// <summary>
+    /// ホットキーを（付け直しも含めて）登録する。
+    /// 設定画面で割り当てを変えたあとにも、そのまま呼んで差し替えられる。
+    /// </summary>
     private void SetupHotKeys()
     {
-        _hotKeys = new HotKeyManager();
+        _hotKeys ??= new HotKeyManager();
+        _hotKeys.UnregisterAll();
 
-        // PrintScreen は Windows 11 の「Snipping Tool を開く」設定に取られることがある。
-        // 取れなかった場合は候補を順に試し、実際に有効なキーを通知する。
-        var region = _hotKeys.Register(
-            "範囲キャプチャ",
-            () => _workflow?.CaptureInteractive(),
-            (0, NativeMethods.VK_SNAPSHOT, "PrintScreen"),
-            (NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT, NativeMethods.VK_SNAPSHOT, "Ctrl+Shift+PrintScreen"),
-            (NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT, 0x53, "Ctrl+Shift+S"));
-
-        var full = _hotKeys.Register(
-            "全画面キャプチャ",
-            () => _workflow?.CaptureAllScreens(),
-            (NativeMethods.MOD_CONTROL, NativeMethods.VK_SNAPSHOT, "Ctrl+PrintScreen"),
-            (NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, NativeMethods.VK_SNAPSHOT, "Ctrl+Alt+PrintScreen"),
-            (NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, 0x50, "Ctrl+Alt+P"));
-
-        var scrolling = _hotKeys.Register(
-            "スクロールキャプチャ",
-            () => _workflow?.CaptureScrolling(),
-            (NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT, 0x4C, "Ctrl+Shift+L"));
-
-        var color = _hotKeys.Register(
-            "色の採取",
-            () => _workflow?.PickColor(),
-            (NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT, 0x43, "Ctrl+Shift+C"),
-            (NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, 0x43, "Ctrl+Alt+C"));
-
-        var recording = _hotKeys.Register(
-            "画面録画",
-            () => _workflow?.StartRecording(),
-            (NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT, 0x52, "Ctrl+Shift+R"),
-            (NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, 0x52, "Ctrl+Alt+R"));
-
-        var workspace = _hotKeys.Register(
-            "ワークスペース",
-            () => _workflow?.ShowWorkspace(),
-            (NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT, 0x57, "Ctrl+Shift+W"));
+        var region = RegisterAction(HotKeyActions.CaptureRegion, () => _workflow?.CaptureInteractive());
+        RegisterAction(HotKeyActions.CaptureAllScreens, () => _workflow?.CaptureAllScreens());
+        RegisterAction(HotKeyActions.CaptureScrolling, () => _workflow?.CaptureScrolling());
+        RegisterAction(HotKeyActions.CaptureDelayed, () => _workflow?.CaptureDelayed());
+        RegisterAction(HotKeyActions.PickColor, () => _workflow?.PickColor());
+        RegisterAction(HotKeyActions.StartRecording, () => _workflow?.StartRecording());
+        RegisterAction(HotKeyActions.ShowWorkspace, () => _workflow?.ShowWorkspace());
 
         var summary = new StringBuilder();
-        foreach (var registration in new[] { region, full, scrolling, color, recording, workspace })
+        foreach (var registration in _hotKeys.Registrations)
         {
             summary.Append(registration.Name)
                 .Append(": ")
@@ -155,23 +130,77 @@ public partial class App : Application
         }
     }
 
+    /// <summary>
+    /// 1 つの操作にホットキーを付ける。
+    ///
+    /// この端末で設定した割り当てを最優先で試し、取れなければ既定の候補へ落とす。
+    /// PrintScreen は Windows 11 の「Snipping Tool を開く」設定に取られることがあるため、
+    /// 候補を順に試して実際に有効になったキーを返す。
+    /// </summary>
+    private HotKeyRegistration RegisterAction(HotKeyAction action, Action handler)
+    {
+        var candidates = new List<HotKeySpec>();
+
+        if (_settings.FindHotKey(action.Id) is { } configured)
+        {
+            candidates.Add(configured);
+        }
+
+        foreach (var fallback in action.DefaultSpecs())
+        {
+            if (!candidates.Contains(fallback))
+            {
+                candidates.Add(fallback);
+            }
+        }
+
+        return _hotKeys!.Register(action.DisplayName, handler, candidates);
+    }
+
+    /// <summary>ホットキーの割り当てを変える画面を出す。</summary>
+    private void ShowHotKeySettings()
+    {
+        // 画面を開いている間は自分のホットキーを全部外す。
+        // 付けたままだと、キーを選ぼうとした瞬間にキャプチャが始まってしまい、
+        // 「そのキーは空いているか」の判定も自分自身に邪魔される。
+        _hotKeys?.UnregisterAll();
+
+        var window = new Torimaru.App.Settings.HotKeySettingsWindow(
+            _settings, HotKeyManager.IsAvailable);
+
+        window.ShowDialog();
+
+        if (window.Changed)
+        {
+            TrySaveSettings();
+        }
+
+        // 変更が無くても必ず付け直す（外したままにしない）
+        SetupHotKeys();
+    }
+
     private void SetupTray()
     {
         var menu = new System.Windows.Forms.ContextMenuStrip();
 
         // 第 3 引数は SetupHotKeys 側の登録名。一致する項目の右側に実際のキーを表示する。
-        AddMenuItem(menu, "キャプチャ（範囲・ウィンドウ）", "範囲キャプチャ", () => _workflow?.CaptureInteractive());
-        AddMenuItem(menu, "全画面をキャプチャ", "全画面キャプチャ", () => _workflow?.CaptureAllScreens());
-        AddMenuItem(menu, "スクロールキャプチャ", "スクロールキャプチャ", () => _workflow?.CaptureScrolling());
-        AddMenuItem(menu, $"遅延キャプチャ（{_settings.DelaySeconds} 秒）", null, () => _workflow?.CaptureDelayed());
-        AddMenuItem(menu, "画面の色を採取", "色の採取", () => _workflow?.PickColor());
+        AddMenuItem(menu, "キャプチャ（範囲・ウィンドウ）", HotKeyActions.CaptureRegion.DisplayName, () => _workflow?.CaptureInteractive());
+        AddMenuItem(menu, "全画面をキャプチャ", HotKeyActions.CaptureAllScreens.DisplayName, () => _workflow?.CaptureAllScreens());
+        AddMenuItem(menu, "スクロールキャプチャ", HotKeyActions.CaptureScrolling.DisplayName, () => _workflow?.CaptureScrolling());
+        AddMenuItem(
+            menu,
+            $"遅延キャプチャ（{_settings.DelaySeconds} 秒）",
+            HotKeyActions.CaptureDelayed.DisplayName,
+            () => _workflow?.CaptureDelayed());
+        AddMenuItem(menu, "画面の色を採取", HotKeyActions.PickColor.DisplayName, () => _workflow?.PickColor());
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-        AddMenuItem(menu, "画面を録画（MP4）", "画面録画", () => _workflow?.StartRecording());
+        AddMenuItem(menu, "画面を録画（MP4）", HotKeyActions.StartRecording.DisplayName, () => _workflow?.StartRecording());
         AddMenuItem(menu, "動画ツール（トリム・結合）", null, () => _workflow?.OpenVideoTools());
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-        AddMenuItem(menu, "ワークスペースを表示", "ワークスペース", () => _workflow?.ShowWorkspace());
+        AddMenuItem(menu, "ワークスペースを表示", HotKeyActions.ShowWorkspace.DisplayName, () => _workflow?.ShowWorkspace());
         AddMenuItem(menu, "保存フォルダを開く", null, () => _workflow?.OpenSaveFolder());
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+        AddMenuItem(menu, "ショートカットキーの設定…", null, ShowHotKeySettings);
         AddMenuItem(menu, "ショートカットキー一覧…", null, ShowHotKeyList);
         AddMenuItem(menu, "設定ファイルを開く", null, OpenSettingsFile);
         AddMenuItem(menu, "ログを開く", null, OpenLogFile);
@@ -232,7 +261,8 @@ public partial class App : Application
         var window = new Editor.TextResultWindow(
             "ショートカットキー一覧",
             "このPCで実際に有効になっているキーです。"
-            + "候補キーが他のアプリに取られていた場合は、代替キーへ自動で切り替わります。",
+            + "候補キーが他のアプリに取られていた場合は、代替キーへ自動で切り替わります。"
+            + "変えたいときは「ショートカットキーの設定…」から割り当て直せます。",
             _hotKeySummary);
 
         window.Show();

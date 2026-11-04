@@ -39,6 +39,17 @@ public readonly record struct PixelRect(double X, double Y, double Width, double
     public bool Contains(double px, double py)
         => px >= X && px <= Right && py >= Y && py <= Bottom;
 
+    /// <summary>
+    /// 別の矩形と面で重なっているか。
+    /// 辺が触れているだけ（幅 0 の重なり）は重なりとみなさない。
+    /// </summary>
+    public bool IntersectsWith(PixelRect other)
+    {
+        var a = Normalized();
+        var b = other.Normalized();
+        return a.X < b.Right && b.X < a.Right && a.Y < b.Bottom && b.Y < a.Bottom;
+    }
+
     /// <summary>ピクセル整数へ丸める（キャプチャ切り出し用）。</summary>
     public (int X, int Y, int Width, int Height) ToIntegerBounds()
     {

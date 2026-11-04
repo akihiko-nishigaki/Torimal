@@ -45,6 +45,10 @@ public static class ShapeRenderer
             Height = height,
             Background = Brushes.Transparent,
             SnapsToDevicePixels = true,
+
+            // 書き出し時は画像の寸法で切られるので、画面でも同じように切る。
+            // トリミング後に画像の外へ出た注釈が画面だけに残るのを防ぐ。
+            ClipToBounds = true,
         };
 
         var backdrop = new Image

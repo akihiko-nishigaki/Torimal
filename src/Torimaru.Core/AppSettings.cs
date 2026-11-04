@@ -77,6 +77,34 @@ public sealed class AppSettings
     /// <summary>ffmpeg.exe のフルパス。空なら PATH から探す。</summary>
     public string? FfmpegPath { get; set; }
 
+    /// <summary>
+    /// 端末ごとのホットキー割り当て。
+    /// キーは <see cref="HotKeyActions"/> の Id、値は "Ctrl+Shift+S" 形式。
+    /// 入っていない操作は <see cref="HotKeyAction.DefaultKeys"/> を使う。
+    /// </summary>
+    public Dictionary<string, string> HotKeys { get; set; } = [];
+
+    /// <summary>その操作に割り当てられたキー。未設定なら null（＝既定を使う）。</summary>
+    public HotKeySpec? FindHotKey(string actionId)
+        => HotKeys.TryGetValue(actionId, out var text) && HotKeySpec.TryParse(text, out var spec)
+            ? spec
+            : null;
+
+    /// <summary>
+    /// 操作にキーを割り当てる。null を渡すと割り当てを消して既定に戻す。
+    /// </summary>
+    public void SetHotKey(string actionId, HotKeySpec? spec)
+    {
+        if (spec is { IsAssigned: true } assigned)
+        {
+            HotKeys[actionId] = assigned.ToString();
+        }
+        else
+        {
+            HotKeys.Remove(actionId);
+        }
+    }
+
     public static string DefaultSaveFolder()
         => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
@@ -164,6 +192,25 @@ public sealed class AppSettings
         ScrollMaxFrames = Math.Clamp(ScrollMaxFrames, 2, 400);
         VideoFps = Math.Clamp(VideoFps, 5, 60);
         VideoCrf = Math.Clamp(VideoCrf, 0, 51);
+
+        // 設定ファイルに "HotKeys": null と書かれていると null が入りうる
+        if (HotKeys is null)
+        {
+            HotKeys = [];
+        }
+
+        // 知らない操作名や、ホットキーとして成立しない指定は捨てる。
+        // 残すと「設定したのに効かない」状態が黙って続いてしまう。
+        HotKeys = HotKeys
+            .Where(pair =>
+                HotKeyActions.Find(pair.Key) is not null
+                && HotKeySpec.TryParse(pair.Value, out var spec)
+                && spec.Validate() is null)
+            .ToDictionary(
+                pair => pair.Key,
+                pair => HotKeySpec.TryParse(pair.Value, out var spec) ? spec.ToString() : pair.Value,
+                StringComparer.Ordinal);
+
         return this;
     }
 }

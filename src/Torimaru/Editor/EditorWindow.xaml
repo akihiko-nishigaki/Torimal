@@ -136,6 +136,18 @@
 
         <Rectangle Style="{StaticResource Divider}" />
 
+        <ToggleButton x:Name="ToolCrop" Style="{StaticResource ToolToggle}" Tag="Crop"
+                      Click="OnToolClick" Content="トリミング" MinWidth="76"
+                      ToolTip="トリミング (X)。残したい範囲をドラッグすると、その外側を切り落とす" />
+        <ToggleButton x:Name="ToolCutRows" Style="{StaticResource ToolToggle}" Tag="CutRows"
+                      Click="OnToolClick" Content="縦に中抜き" MinWidth="78"
+                      ToolTip="縦に縮める (N)。要らない中間部分を上下にドラッグで指定すると、その帯を抜いて上下を繋ぐ" />
+        <ToggleButton x:Name="ToolCutColumns" Style="{StaticResource ToolToggle}" Tag="CutColumns"
+                      Click="OnToolClick" Content="横に中抜き" MinWidth="78"
+                      ToolTip="横に縮める (M)。要らない中間部分を左右にドラッグで指定すると、その帯を抜いて左右を繋ぐ" />
+
+        <Rectangle Style="{StaticResource Divider}" />
+
         <StackPanel x:Name="Palette" Orientation="Horizontal" VerticalAlignment="Center" />
 
         <Rectangle Style="{StaticResource Divider}" />
@@ -280,6 +292,12 @@
                      StrokeDashArray="4 3"
                      Fill="#141F6FEB"
                      Visibility="Collapsed" />
+          <!-- トリミング・中抜きでドラッグ中の範囲。色は用途ごとにコード側で変える -->
+          <Rectangle x:Name="RegionAdorner"
+                     StrokeThickness="2"
+                     StrokeDashArray="5 3"
+                     Visibility="Collapsed" />
+
           <!-- 吹き出しの先端をドラッグするつまみ -->
           <Ellipse x:Name="TailHandle"
                    Width="11" Height="11"

@@ -18,6 +18,25 @@ public partial class EditorWindow : Window
 {
     private const string SelectTool = "Select";
 
+    // 画像そのものを切るツール。注釈を置くツールとは別扱いで、
+    // ドラッグで範囲を決めたら即その場で画像に反映する。
+    private const string CropTool = "Crop";
+    private const string CutRowsTool = "CutRows";
+    private const string CutColumnsTool = "CutColumns";
+
+    /// <summary>画像を切るツールか（＝図形を作らないツールか）。</summary>
+    private static bool IsImageTool(string tool)
+        => tool is CropTool or CutRowsTool or CutColumnsTool;
+
+    /// <summary>
+    /// 元に戻すための 1 手分。
+    ///
+    /// 注釈だけでなく下地の画像も持つ。トリミングや中抜きは下地を切り替えるので、
+    /// 注釈の JSON だけ戻しても寸法の違う画像に古い座標が乗ってしまう。
+    /// 画像は凍結済みで共有できるため、切っていない手では参照が増えるだけで済む。
+    /// </summary>
+    private readonly record struct EditorSnapshot(BitmapSource Image, string DocumentJson);
+
     private static readonly string[] Swatches =
     [
         "#FFE53935", // 赤
@@ -31,8 +50,8 @@ public partial class EditorWindow : Window
     ];
 
     private readonly AppSettings _settings;
-    private readonly Stack<string> _undo = new();
-    private readonly Stack<string> _redo = new();
+    private readonly Stack<EditorSnapshot> _undo = new();
+    private readonly Stack<EditorSnapshot> _redo = new();
 
     private BitmapSource _baseImage;
     private AnnotationDocument _document;
@@ -50,7 +69,7 @@ public partial class EditorWindow : Window
     private AnnotationShape? _draft;
     private AnnotationShape? _editingText;
 
-    private string? _pendingSnapshot;
+    private EditorSnapshot? _pendingSnapshot;
     private bool _moving;
     private Point _moveOrigin;
     private double _moveShapeX;
@@ -68,6 +87,17 @@ public partial class EditorWindow : Window
 
     /// <summary>選択中の図形に合わせて書体・大きさの欄を更新している間だけ true。</summary>
     private bool _syncingFont;
+
+    /// <summary>トリミング・中抜きの範囲をドラッグ中。</summary>
+    private bool _regionDragging;
+    private Point _regionOrigin;
+
+    /// <summary>
+    /// この編集中に一度でも下地を切ったか。
+    /// 切った場合は保存時に控えのオリジナルも差し替える必要がある
+    /// （元に戻したあとでも差し替えは必要なので、一度 true にしたら戻さない）。
+    /// </summary>
+    private bool _baseImageCut;
 
     public EditorWindow(string path, LoadedCapture loaded, AppSettings settings)
     {
@@ -215,17 +245,38 @@ public partial class EditorWindow : Window
                  {
                      ToolSelect, ToolArrow, ToolRectangle, ToolEllipse,
                      ToolText, ToolCallout, ToolStep, ToolHighlight, ToolBlur,
+                     ToolCrop, ToolCutRows, ToolCutColumns,
                  })
         {
             toggle.IsChecked = (string?)toggle.Tag == tool;
         }
 
-        CanvasHost.Cursor = tool == SelectTool ? Cursors.Arrow : Cursors.Cross;
+        CanvasHost.Cursor = tool switch
+        {
+            SelectTool => Cursors.Arrow,
+            CutRowsTool => Cursors.SizeNS,
+            CutColumnsTool => Cursors.SizeWE,
+            _ => Cursors.Cross,
+        };
 
         if (tool != SelectTool)
         {
             _selected = null;
             UpdateSelectionAdorner();
+        }
+
+        // 画像を切るツールは手順が分かりにくいので、選んだ時点でやり方を出す
+        switch (tool)
+        {
+            case CropTool:
+                UpdateStatus("トリミング: 残したい範囲をドラッグしてください（Esc で中止）");
+                break;
+            case CutRowsTool:
+                UpdateStatus("縦に中抜き: 消したい中間部分を上下にドラッグしてください（Esc で中止）");
+                break;
+            case CutColumnsTool:
+                UpdateStatus("横に中抜き: 消したい中間部分を左右にドラッグしてください（Esc で中止）");
+                break;
         }
     }
 
@@ -626,6 +677,17 @@ public partial class EditorWindow : Window
 
         var point = ToImagePoint(e.GetPosition(CanvasHost));
 
+        if (IsImageTool(_tool))
+        {
+            // ScrollViewer にフォーカスを奪われると Esc での中止が効かなくなる
+            e.Handled = true;
+            _regionDragging = true;
+            _regionOrigin = point;
+            CanvasHost.CaptureMouse();
+            UpdateRegionAdorner(point);
+            return;
+        }
+
         if (_tool == SelectTool)
         {
             // ダブルクリックで、確定済みの文字・吹き出しを書き直す
@@ -714,6 +776,12 @@ public partial class EditorWindow : Window
 
         PositionText.Text = $"{point.X,5:F0}, {point.Y,-5:F0}";
 
+        if (_regionDragging)
+        {
+            UpdateRegionAdorner(point);
+            return;
+        }
+
         if (_draft is not null)
         {
             _draft.Width = point.X - _draft.X;
@@ -751,6 +819,14 @@ public partial class EditorWindow : Window
     private void OnCanvasMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         CanvasHost.ReleaseMouseCapture();
+
+        if (_regionDragging)
+        {
+            _regionDragging = false;
+            RegionAdorner.Visibility = Visibility.Collapsed;
+            ApplyImageTool(_regionOrigin, ToImagePoint(e.GetPosition(CanvasHost)));
+            return;
+        }
 
         if (_draft is not null)
         {
@@ -790,6 +866,148 @@ public partial class EditorWindow : Window
             _moving = false;
             CommitAction();
         }
+    }
+
+    // ---------------------------------------------------------------- 画像を切る
+
+    private static readonly Brush KeepStroke = FrozenBrush("#FF1F6FEB");
+    private static readonly Brush KeepFill = FrozenBrush("#201F6FEB");
+    private static readonly Brush CutStroke = FrozenBrush("#FFE53935");
+    private static readonly Brush CutFill = FrozenBrush("#40E53935");
+
+    private static Brush FrozenBrush(string hex)
+    {
+        var brush = new SolidColorBrush(ShapeRenderer.ParseColor(hex));
+        brush.Freeze();
+        return brush;
+    }
+
+    /// <summary>
+    /// ドラッグ中の範囲を見せる。
+    /// トリミングは「残す範囲」なので青、中抜きは「消える帯」なので赤く塗る。
+    /// </summary>
+    private void UpdateRegionAdorner(Point current)
+    {
+        var width = _baseImage.PixelWidth;
+        var height = _baseImage.PixelHeight;
+
+        // 中抜きは片方の軸しか意味を持たないので、もう一方は画像いっぱいに広げる
+        var region = _tool switch
+        {
+            CutRowsTool => new PixelRect(
+                0, Math.Min(_regionOrigin.Y, current.Y),
+                width, Math.Abs(current.Y - _regionOrigin.Y)),
+            CutColumnsTool => new PixelRect(
+                Math.Min(_regionOrigin.X, current.X), 0,
+                Math.Abs(current.X - _regionOrigin.X), height),
+            _ => PixelRect.FromPoints(_regionOrigin.X, _regionOrigin.Y, current.X, current.Y),
+        };
+
+        region = region.Clip(width, height);
+
+        var keeping = _tool == CropTool;
+        RegionAdorner.Stroke = keeping ? KeepStroke : CutStroke;
+        RegionAdorner.Fill = keeping ? KeepFill : CutFill;
+
+        Canvas.SetLeft(RegionAdorner, region.X * DisplayScale);
+        Canvas.SetTop(RegionAdorner, region.Y * DisplayScale);
+        RegionAdorner.Width = Math.Max(1, region.Width * DisplayScale);
+        RegionAdorner.Height = Math.Max(1, region.Height * DisplayScale);
+        RegionAdorner.Visibility = Visibility.Visible;
+
+        UpdateStatus(_tool switch
+        {
+            CutRowsTool => $"抜く高さ: {region.Height:F0} px → 残り {height - (int)region.Height} px",
+            CutColumnsTool => $"抜く幅: {region.Width:F0} px → 残り {width - (int)region.Width} px",
+            _ => $"残す範囲: {region.Width:F0} x {region.Height:F0} px",
+        });
+    }
+
+    private void CancelRegionDrag()
+    {
+        _regionDragging = false;
+        RegionAdorner.Visibility = Visibility.Collapsed;
+        CanvasHost.ReleaseMouseCapture();
+    }
+
+    /// <summary>ドラッグし終えた範囲を実際に画像へ反映する。</summary>
+    private void ApplyImageTool(Point from, Point to)
+    {
+        var width = _baseImage.PixelWidth;
+        var height = _baseImage.PixelHeight;
+
+        switch (_tool)
+        {
+            case CropTool:
+            {
+                var dragged = PixelRect.FromPoints(from.X, from.Y, to.X, to.Y);
+
+                if (!ImageCutPlan.TryPlanCrop(dragged, width, height, out var crop, out var problem))
+                {
+                    UpdateStatus($"トリミング: {problem}");
+                    return;
+                }
+
+                ApplyCut(
+                    ImageEditing.Crop(_baseImage, crop.X, crop.Y, crop.Width, crop.Height),
+                    AnnotationTransform.Crop(
+                        _document, new PixelRect(crop.X, crop.Y, crop.Width, crop.Height)),
+                    $"トリミングしました: {crop.Width} x {crop.Height} px");
+                return;
+            }
+
+            case CutRowsTool:
+            {
+                if (!ImageCutPlan.TryPlanBand(from.Y, to.Y, height, out var start, out var count, out var problem))
+                {
+                    UpdateStatus($"縦に中抜き: {problem}");
+                    return;
+                }
+
+                ApplyCut(
+                    ImageEditing.RemoveRows(_baseImage, start, count),
+                    AnnotationTransform.RemoveRows(_document, start, count),
+                    $"縦に {count} px 抜きました: {width} x {height - count} px");
+                return;
+            }
+
+            case CutColumnsTool:
+            {
+                if (!ImageCutPlan.TryPlanBand(from.X, to.X, width, out var start, out var count, out var problem))
+                {
+                    UpdateStatus($"横に中抜き: {problem}");
+                    return;
+                }
+
+                ApplyCut(
+                    ImageEditing.RemoveColumns(_baseImage, start, count),
+                    AnnotationTransform.RemoveColumns(_document, start, count),
+                    $"横に {count} px 抜きました: {width - count} x {height} px");
+                return;
+            }
+        }
+    }
+
+    /// <summary>切った下地と、付け替えた注釈を 1 手として反映する。</summary>
+    private void ApplyCut(BitmapSource image, AnnotationDocument document, string message)
+    {
+        BeginAction();
+
+        _baseImage = image;
+        _document = document;
+
+        // 控えのオリジナルも差し替える必要がある、という印。
+        // 元に戻しても差し替えは必要なので、一度立てたら下ろさない。
+        _baseImageCut = true;
+
+        _selected = null;
+        _draft = null;
+
+        CommitAction();
+
+        UpdateSelectionAdorner();
+        Render();
+        UpdateStatus(message);
     }
 
     /// <summary>手前にある図形を優先して当たり判定する。</summary>
@@ -1056,25 +1274,30 @@ public partial class EditorWindow : Window
 
     // ---------------------------------------------------------------- Undo / Redo
 
-    private void BeginAction() => _pendingSnapshot = _document.ToJson();
+    private EditorSnapshot CurrentSnapshot() => new(_baseImage, _document.ToJson());
+
+    private void BeginAction() => _pendingSnapshot = CurrentSnapshot();
 
     private void CommitAction()
     {
-        if (_pendingSnapshot is null)
+        if (_pendingSnapshot is not { } snapshot)
         {
             return;
         }
+
+        _pendingSnapshot = null;
 
         // 掴んだだけで動かさなかった場合など、中身が変わっていなければ履歴に積まない
-        // （ダブルクリックの 1 回目で空の「元に戻す」が増えるのを防ぐ）
-        if (string.Equals(_pendingSnapshot, _document.ToJson(), StringComparison.Ordinal))
+        // （ダブルクリックの 1 回目で空の「元に戻す」が増えるのを防ぐ）。
+        // 画像も比べるのは、注釈が無い絵をトリミングしたときに
+        // 「JSON は同じだから変化なし」と誤判定して戻せなくなるのを防ぐため。
+        if (ReferenceEquals(snapshot.Image, _baseImage)
+            && string.Equals(snapshot.DocumentJson, _document.ToJson(), StringComparison.Ordinal))
         {
-            _pendingSnapshot = null;
             return;
         }
 
-        _undo.Push(_pendingSnapshot);
-        _pendingSnapshot = null;
+        _undo.Push(snapshot);
         _redo.Clear();
         _dirty = true;
 
@@ -1095,9 +1318,9 @@ public partial class EditorWindow : Window
             return;
         }
 
-        _redo.Push(_document.ToJson());
+        _redo.Push(CurrentSnapshot());
         ApplySnapshot(_undo.Pop());
-        UpdateStatus("元に戻しました");
+        UpdateStatus($"元に戻しました（{_baseImage.PixelWidth} x {_baseImage.PixelHeight} px）");
     }
 
     private void OnRedo(object sender, RoutedEventArgs e) => Redo();
@@ -1110,14 +1333,15 @@ public partial class EditorWindow : Window
             return;
         }
 
-        _undo.Push(_document.ToJson());
+        _undo.Push(CurrentSnapshot());
         ApplySnapshot(_redo.Pop());
-        UpdateStatus("やり直しました");
+        UpdateStatus($"やり直しました（{_baseImage.PixelWidth} x {_baseImage.PixelHeight} px）");
     }
 
-    private void ApplySnapshot(string json)
+    private void ApplySnapshot(EditorSnapshot snapshot)
     {
-        _document = AnnotationDocument.FromJson(json) ?? new AnnotationDocument();
+        _baseImage = snapshot.Image;
+        _document = AnnotationDocument.FromJson(snapshot.DocumentJson) ?? new AnnotationDocument();
         _selected = null;
         _draft = null;
         _dirty = true;
@@ -1161,7 +1385,7 @@ public partial class EditorWindow : Window
 
         try
         {
-            CaptureSaver.SaveEdited(_path, _baseImage, _document);
+            CaptureSaver.SaveEdited(_path, _baseImage, _document, replaceOriginal: _baseImageCut);
             _dirty = false;
             UpdateStatus($"保存しました: {System.IO.Path.GetFileName(_path)}");
             return true;
@@ -1396,8 +1620,23 @@ public partial class EditorWindow : Window
                 e.Handled = true;
                 break;
             case Key.Escape:
-                _selected = null;
-                UpdateSelectionAdorner();
+                if (_regionDragging)
+                {
+                    CancelRegionDrag();
+                    UpdateStatus("中止しました");
+                }
+                else if (IsImageTool(_tool))
+                {
+                    // 画像を切るツールのままだと次のドラッグでまた切ってしまう
+                    SelectTool_(SelectTool);
+                    UpdateStatus("選択ツールに戻しました");
+                }
+                else
+                {
+                    _selected = null;
+                    UpdateSelectionAdorner();
+                }
+
                 e.Handled = true;
                 break;
             case Key.F2:
@@ -1442,6 +1681,18 @@ public partial class EditorWindow : Window
                 break;
             case Key.B:
                 SelectTool_(ShapeKind.Blur);
+                e.Handled = true;
+                break;
+            case Key.X:
+                SelectTool_(CropTool);
+                e.Handled = true;
+                break;
+            case Key.N:
+                SelectTool_(CutRowsTool);
+                e.Handled = true;
+                break;
+            case Key.M:
+                SelectTool_(CutColumnsTool);
                 e.Handled = true;
                 break;
         }

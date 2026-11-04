@@ -294,6 +294,204 @@ public static class SelfCheck
         });
 
         report.AppendLine();
+        report.AppendLine("[トリミング・中抜き]");
+
+        // 横縞の絵を下地にする。縞の色から「どの行が残ったか」が分かる。
+        var striped = RenderStripes(360, 300, bandHeight: 30);
+
+        Check("トリミングすると画像と注釈が一緒に寄る", () =>
+        {
+            var doc = new AnnotationDocument
+            {
+                Shapes =
+                [
+                    new AnnotationShape
+                    {
+                        Kind = ShapeKind.Rectangle,
+                        X = 120, Y = 150, Width = 60, Height = 40,
+                        Color = "#FFE53935",
+                    },
+                ],
+            };
+
+            var area = new PixelRect(100, 120, 200, 150);
+            var cropped = ImageEditing.Crop(striped, 100, 120, 200, 150);
+            var moved = AnnotationTransform.Crop(doc, area);
+
+            if (cropped.PixelWidth != 200 || cropped.PixelHeight != 150)
+            {
+                return false;
+            }
+
+            // 切った左上が元の (100,120) の色になっていること
+            var sameColour = PixelOf(cropped, 0, 0) == PixelOf(striped, 100, 120);
+
+            // 注釈も同じだけ寄っていること（画像だけ切ると中身とずれる）
+            var shape = moved.Shapes.Single();
+            var shifted = Math.Abs(shape.X - 20) < 0.01 && Math.Abs(shape.Y - 30) < 0.01;
+
+            // 焼き込んでも寸法が保たれること
+            var flat = CaptureSaver.Flatten(cropped, moved);
+
+            report.AppendLine(
+                $"       {striped.PixelWidth}x{striped.PixelHeight} → {cropped.PixelWidth}x{cropped.PixelHeight}"
+                + $" / 注釈 (120,150) → ({shape.X:0},{shape.Y:0})");
+
+            return sameColour && shifted
+                && flat.PixelWidth == 200 && flat.PixelHeight == 150;
+        });
+
+        Check("縦に中抜きすると帯が消えて上下が繋がる", () =>
+        {
+            // 90〜150 の帯（縞 3 本目と 4 本目）を抜く
+            var cut = ImageEditing.RemoveRows(striped, 90, 60);
+
+            if (cut.PixelHeight != 240 || cut.PixelWidth != 360)
+            {
+                return false;
+            }
+
+            // 継ぎ目の上は元のまま、下は元の 150 行目以降が詰まっていること
+            var above = PixelOf(cut, 5, 89) == PixelOf(striped, 5, 89);
+            var below = PixelOf(cut, 5, 90) == PixelOf(striped, 5, 150);
+
+            // 抜いた帯の色がどこにも残っていないこと
+            var removed = PixelOf(striped, 5, 100);
+            var leftOver = 0;
+            for (var y = 0; y < cut.PixelHeight; y++)
+            {
+                if (PixelOf(cut, 5, y) == removed)
+                {
+                    leftOver++;
+                }
+            }
+
+            report.AppendLine(
+                $"       高さ {striped.PixelHeight} → {cut.PixelHeight} px"
+                + $" / 抜いた縞の残り: {leftOver} 行");
+
+            return above && below && leftOver == 0;
+        });
+
+        Check("横に中抜きすると帯が消えて左右が繋がる", () =>
+        {
+            var vertical = RenderStripes(300, 120, bandHeight: 30, horizontal: false);
+            var cut = ImageEditing.RemoveColumns(vertical, 60, 60);
+
+            if (cut.PixelWidth != 240 || cut.PixelHeight != 120)
+            {
+                return false;
+            }
+
+            report.AppendLine($"       幅 {vertical.PixelWidth} → {cut.PixelWidth} px");
+
+            return PixelOf(cut, 59, 5) == PixelOf(vertical, 59, 5)
+                && PixelOf(cut, 60, 5) == PixelOf(vertical, 120, 5);
+        });
+
+        var cutPath = Path.Combine(outputFolder, "selfcheck-cut.png");
+
+        Check("切った画像を保存すると、控えのオリジナルも差し替わる", () =>
+        {
+            // ここが要点。控えを差し替えないと、次に開いたときに
+            // 「切る前の大きな画像」に「切った後の座標の注釈」が乗ってしまう。
+            foreach (var path in new[] { cutPath, CaptureNaming.OriginalPathFor(cutPath) })
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+
+            // まず切る前の状態で保存して、控えを作る
+            CaptureSaver.SaveEdited(cutPath, striped, new AnnotationDocument());
+
+            var doc = new AnnotationDocument
+            {
+                Shapes =
+                [
+                    new AnnotationShape
+                    {
+                        Kind = ShapeKind.Rectangle,
+                        X = 40, Y = 30, Width = 80, Height = 50,
+                        Color = "#FF1E88E5",
+                    },
+                ],
+            };
+
+            var cut = ImageEditing.RemoveRows(striped, 90, 60);
+            CaptureSaver.SaveEdited(cutPath, cut, doc, replaceOriginal: true);
+
+            var reloadedCut = CaptureSaver.Load(cutPath);
+
+            report.AppendLine(
+                $"       再読込した下地: {reloadedCut.BaseImage.PixelWidth}"
+                + $" x {reloadedCut.BaseImage.PixelHeight} px（切った後と一致すべき）");
+
+            return reloadedCut.BaseImage.PixelWidth == cut.PixelWidth
+                && reloadedCut.BaseImage.PixelHeight == cut.PixelHeight
+                && reloadedCut.Document.Shapes.Count == 1
+                && CountDifferingPixels(cut, reloadedCut.BaseImage) == 0;
+        });
+
+        Check("切っていないときは控えのオリジナルを上書きしない", () =>
+        {
+            // オリジナルが失われた絵を開いて保存したときに、
+            // 焼き込み済みの絵で控えを潰してしまわないための歯止め。
+            var originalPath = CaptureNaming.OriginalPathFor(cutPath);
+            var before = File.ReadAllBytes(originalPath);
+
+            CaptureSaver.SaveEdited(cutPath, RenderSolid(System.Windows.Media.Colors.Black, 40, 40), new AnnotationDocument());
+
+            return File.ReadAllBytes(originalPath).SequenceEqual(before);
+        });
+
+        // 画面そのものを組み立ててみる。XAML の書き間違いや
+        // 組み立て中の例外は、ここを通さないと起動して初めて分かる。
+        Check("編集画面を組み立てられる（画像を切るツールが並ぶ）", () =>
+        {
+            var editor = new EditorWindow(
+                Path.Combine(outputFolder, "editor-probe.png"),
+                new LoadedCapture(striped, new AnnotationDocument()),
+                new AppSettings());
+
+            try
+            {
+                var tools = new[] { "ToolCrop", "ToolCutRows", "ToolCutColumns", "ToolSelect" };
+                var found = tools.Count(name =>
+                    editor.FindName(name) is System.Windows.Controls.Primitives.ToggleButton);
+
+                var adorner = editor.FindName("RegionAdorner") is System.Windows.Shapes.Rectangle;
+
+                report.AppendLine($"       ツール: {found} / {tools.Length} 個 / 範囲表示: {adorner}");
+                return found == tools.Length && adorner;
+            }
+            finally
+            {
+                TryClose(editor);
+            }
+        });
+
+        Check("ショートカットキーの設定画面を組み立てられる", () =>
+        {
+            var window = new Torimaru.App.Settings.HotKeySettingsWindow(
+                new AppSettings(), _ => true);
+
+            try
+            {
+                var rows = window.FindName("Rows") as System.Windows.Controls.Panel;
+                report.AppendLine(
+                    $"       行数: {rows?.Children.Count} / 操作数: {HotKeyActions.All.Length}");
+
+                return rows is not null && rows.Children.Count == HotKeyActions.All.Length;
+            }
+            finally
+            {
+                TryClose(window);
+            }
+        });
+
+        report.AppendLine();
         report.AppendLine("[複数行テキスト]");
 
         // 測定は描画 (ShapeRenderer) と同じ書体で行う必要がある。
@@ -1263,6 +1461,63 @@ public static class SelfCheck
     }
 
     /// <summary>単色で塗った画像を作る（カラーピッカーの検証用）。</summary>
+    /// <summary>
+    /// 確認のために組み立てただけのウィンドウを片付ける。
+    /// 画面に出していないウィンドウなので、閉じられなくても確認結果には影響しない。
+    /// </summary>
+    private static void TryClose(System.Windows.Window window)
+    {
+        try
+        {
+            window.Close();
+        }
+        catch (InvalidOperationException)
+        {
+            // 表示前のウィンドウは閉じられない場合がある
+        }
+    }
+
+    /// <summary>
+    /// 縞模様の絵を作る。縞の色から「どの行（列）が残ったか」が分かるので、
+    /// 中抜きが本当に狙った帯を抜いたかを色で確かめられる。
+    /// </summary>
+    private static System.Windows.Media.Imaging.BitmapSource RenderStripes(
+        int width, int height, int bandHeight, bool horizontal = true)
+    {
+        var visual = new System.Windows.Media.DrawingVisual();
+        using (var context = visual.RenderOpen())
+        {
+            var bands = (int)Math.Ceiling((double)(horizontal ? height : width) / bandHeight);
+
+            for (var i = 0; i < bands; i++)
+            {
+                // 隣同士がはっきり違う色になるように散らす
+                var colour = System.Windows.Media.Color.FromRgb(
+                    (byte)(20 + (i * 37 % 200)),
+                    (byte)(60 + (i * 83 % 180)),
+                    (byte)(200 - (i * 53 % 190)));
+
+                var rect = horizontal
+                    ? new System.Windows.Rect(0, i * bandHeight, width, bandHeight)
+                    : new System.Windows.Rect(i * bandHeight, 0, bandHeight, height);
+
+                context.DrawRectangle(
+                    new System.Windows.Media.SolidColorBrush(colour), null, rect);
+            }
+        }
+
+        return RenderToBitmap(visual, width, height);
+    }
+
+    /// <summary>1 画素の色を (B,G,R) で取り出す（どの行から来た画素かの照合用）。</summary>
+    private static (byte B, byte G, byte R) PixelOf(
+        System.Windows.Media.Imaging.BitmapSource image, int x, int y)
+    {
+        var pixels = ToBgra(image);
+        var i = ((y * image.PixelWidth) + x) * 4;
+        return (pixels[i], pixels[i + 1], pixels[i + 2]);
+    }
+
     private static System.Windows.Media.Imaging.BitmapSource RenderSolid(
         System.Windows.Media.Color color, int width, int height)
     {

@@ -31,17 +31,23 @@ public static class CaptureSaver
 
         var bytes = EncodePng(image);
         File.WriteAllBytes(path, bytes);
-        WriteOriginal(path, bytes);
+        WriteOriginal(path, bytes, replaceExisting: false);
 
         return path;
     }
 
     /// <summary>注釈込みで上書き保存する。</summary>
+    /// <param name="replaceOriginal">
+    /// 控えのオリジナルを今の下地で置き換えるか。
+    /// トリミングや中抜きで下地そのものを切ったときは必ず true にする。
+    /// false のままだと切る前のオリジナルが残り、次に開いたときに
+    /// 「寸法の違う画像に切った後の注釈が乗る」ことになる。
+    /// </param>
     public static void SaveEdited(
-        string path, BitmapSource baseImage, AnnotationDocument document)
+        string path, BitmapSource baseImage, AnnotationDocument document, bool replaceOriginal = false)
     {
         var originalBytes = EncodePng(baseImage);
-        WriteOriginal(path, originalBytes);
+        WriteOriginal(path, originalBytes, replaceOriginal);
 
         document.OriginalRelativePath = CaptureNaming.OriginalRelativePathFor(path);
 
@@ -51,8 +57,13 @@ public static class CaptureSaver
         File.WriteAllBytes(path, payload);
     }
 
-    /// <summary>注釈前のオリジナルを控えとして置く（既にあれば触らない）。</summary>
-    private static void WriteOriginal(string flattenedPath, byte[] originalPngBytes)
+    /// <summary>
+    /// 注釈前のオリジナルを控えとして置く。
+    /// 既にあるものは原則そのまま残す（オリジナルが失われていた場合に
+    /// 焼き込み済みの絵で上書きしてしまうのを防ぐため）。
+    /// </summary>
+    private static void WriteOriginal(
+        string flattenedPath, byte[] originalPngBytes, bool replaceExisting)
     {
         var originalPath = CaptureNaming.OriginalPathFor(flattenedPath);
         var dir = Path.GetDirectoryName(originalPath);
@@ -77,7 +88,7 @@ public static class CaptureSaver
             AppLog.Error("オリジナル用フォルダを隠し属性にできませんでした", ex);
         }
 
-        if (!File.Exists(originalPath))
+        if (replaceExisting || !File.Exists(originalPath))
         {
             File.WriteAllBytes(originalPath, originalPngBytes);
         }
