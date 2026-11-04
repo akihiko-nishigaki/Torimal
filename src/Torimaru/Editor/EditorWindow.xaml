@@ -141,10 +141,10 @@
                       ToolTip="トリミング (X)。残したい範囲をドラッグすると、その外側を切り落とす" />
         <ToggleButton x:Name="ToolCutRows" Style="{StaticResource ToolToggle}" Tag="CutRows"
                       Click="OnToolClick" Content="縦に中抜き" MinWidth="78"
-                      ToolTip="縦に縮める (N)。要らない中間部分を上下にドラッグで指定すると、その帯を抜いて上下を繋ぐ" />
+                      ToolTip="縦に縮める (N)。要らない中間部分を上下にドラッグし、端をつまんで微調整してから Enter で確定すると、その帯を抜いて上下を繋ぐ" />
         <ToggleButton x:Name="ToolCutColumns" Style="{StaticResource ToolToggle}" Tag="CutColumns"
                       Click="OnToolClick" Content="横に中抜き" MinWidth="78"
-                      ToolTip="横に縮める (M)。要らない中間部分を左右にドラッグで指定すると、その帯を抜いて左右を繋ぐ" />
+                      ToolTip="横に縮める (M)。要らない中間部分を左右にドラッグし、端をつまんで微調整してから Enter で確定すると、その帯を抜いて左右を繋ぐ" />
 
         <Rectangle Style="{StaticResource Divider}" />
 
@@ -298,6 +298,18 @@
                      StrokeDashArray="5 3"
                      Visibility="Collapsed" />
 
+          <!-- 中抜きの確定待ち。帯の両端をつまんで微調整する -->
+          <Rectangle x:Name="BandGripA"
+                     Fill="#FFE53935"
+                     Stroke="White"
+                     StrokeThickness="1"
+                     Visibility="Collapsed" />
+          <Rectangle x:Name="BandGripB"
+                     Fill="#FFE53935"
+                     Stroke="White"
+                     StrokeThickness="1"
+                     Visibility="Collapsed" />
+
           <!-- 吹き出しの先端をドラッグするつまみ -->
           <Ellipse x:Name="TailHandle"
                    Width="11" Height="11"
@@ -322,6 +334,28 @@
                    Padding="2,0"
                    LostKeyboardFocus="OnInlineTextLostFocus"
                    PreviewKeyDown="OnInlineTextKeyDown" />
+        </Canvas>
+
+        <!-- 中抜きの「確定／中止」。
+             EditOverlay は入力を透過させるので、押せるものはこちらに置く。
+             Canvas 自体は地色が無いので、バー以外のクリックは下の画像に届く。 -->
+        <Canvas x:Name="BandBarLayer">
+          <Border x:Name="BandBar"
+                  Width="180" Height="36"
+                  Background="#FFFFFFFF"
+                  BorderBrush="#FFE53935"
+                  BorderThickness="1"
+                  CornerRadius="5"
+                  Visibility="Collapsed">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="5,0">
+              <Button Style="{StaticResource BarButton}" Click="OnConfirmBand"
+                      Content="確定" MinWidth="80"
+                      ToolTip="この帯を抜く (Enter)" />
+              <Button Style="{StaticResource BarButton}" Click="OnCancelBand"
+                      Content="中止" MinWidth="80" Margin="0"
+                      ToolTip="指定をやめる (Esc)" />
+            </StackPanel>
+          </Border>
         </Canvas>
 
       </Grid>

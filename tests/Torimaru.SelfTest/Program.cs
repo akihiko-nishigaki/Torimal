@@ -23,6 +23,7 @@ internal static class Program
         HotKeyTests(t);
         ImageSurgeryTests(t);
         AnnotationTransformTests(t);
+        BandSelectionTests(t);
 
         return t.Report();
     }
@@ -1229,6 +1230,135 @@ internal static class Program
                 // 後片付けの失敗でテストを落とさない
             }
         }
+    }
+
+    // ================================================================ 中抜きの確定待ち
+
+    private static void BandSelectionTests(TestRunner t)
+    {
+        t.Section("中抜きの確定待ち（帯の微調整）");
+
+        t.Case("ドラッグの向きが逆でも同じ帯になる", () =>
+        {
+            var down = BandSelection.FromDrag(90, 150, 300);
+            var up = BandSelection.FromDrag(150, 90, 300);
+
+            TestRunner.Equal(down, up, "向きで変わらない");
+            TestRunner.Near(60, down.Thickness, 0.001, "太さ");
+        });
+
+        t.Case("画像の外へドラッグしても中へ収める", () =>
+        {
+            var band = BandSelection.FromDrag(-40, 500, 300);
+
+            TestRunner.Near(0, band.Start, 0.001, "始まり");
+            TestRunner.Near(300, band.End, 0.001, "終わり");
+        });
+
+        t.Case("辺の近くをつまむと、その辺を掴む", () =>
+        {
+            var band = new BandSelection(100, 200);
+
+            TestRunner.Equal(BandGrip.Start, band.HitTest(102, 5), "上端の近く");
+            TestRunner.Equal(BandGrip.End, band.HitTest(197, 5), "下端の近く");
+        });
+
+        t.Case("帯の内側は帯ごと、外側は掴まない", () =>
+        {
+            var band = new BandSelection(100, 200);
+
+            TestRunner.Equal(BandGrip.Whole, band.HitTest(150, 5), "内側");
+            TestRunner.Equal(BandGrip.None, band.HitTest(80, 5), "外側");
+        });
+
+        t.Case("細い帯でも近いほうの辺を掴める", () =>
+        {
+            // 両方の辺が許容範囲に入る。内側扱いになると細い帯を広げられなくなる
+            var band = new BandSelection(100, 104);
+
+            TestRunner.Equal(BandGrip.Start, band.HitTest(101, 5), "上端寄り");
+            TestRunner.Equal(BandGrip.End, band.HitTest(103, 5), "下端寄り");
+        });
+
+        t.Case("辺を反対側へ追い越すと前後が入れ替わる", () =>
+        {
+            var band = new BandSelection(100, 200).MoveEdge(BandGrip.Start, 250, 300);
+
+            TestRunner.Near(200, band.Start, 0.001, "始まり");
+            TestRunner.Near(250, band.End, 0.001, "終わり");
+        });
+
+        t.Case("辺を動かしても画像の外へは出ない", () =>
+        {
+            var band = new BandSelection(100, 200).MoveEdge(BandGrip.End, 900, 300);
+
+            TestRunner.Near(300, band.End, 0.001, "画像の端で止まる");
+        });
+
+        t.Case("帯ごと動かしても太さは変わらない", () =>
+        {
+            var band = new BandSelection(100, 200).MoveTo(40, 300);
+
+            TestRunner.Near(40, band.Start, 0.001, "始まり");
+            TestRunner.Near(100, band.Thickness, 0.001, "太さ");
+        });
+
+        t.Case("帯ごと動かすと画像の中で止まる", () =>
+        {
+            var band = new BandSelection(100, 200).MoveTo(280, 300);
+
+            TestRunner.Near(200, band.Start, 0.001, "始まり");
+            TestRunner.Near(300, band.End, 0.001, "終わり");
+            TestRunner.Near(100, band.Thickness, 0.001, "太さは保たれる");
+        });
+
+        t.Case("キーで 1 px ずつずらせる", () =>
+        {
+            var band = new BandSelection(100, 160).Shift(-1, 300).Shift(-1, 300);
+
+            TestRunner.Near(98, band.Start, 0.001, "始まり");
+            TestRunner.Near(158, band.End, 0.001, "終わり");
+        });
+
+        t.Case("キーで太さを変えると、始まりは動かない", () =>
+        {
+            var band = new BandSelection(100, 160).Resize(10, 300);
+
+            TestRunner.Near(100, band.Start, 0.001, "始まりは据え置き");
+            TestRunner.Near(170, band.End, 0.001, "終わりだけ動く");
+        });
+
+        t.Case("太さを縮め続けても始まりより手前には来ない", () =>
+        {
+            var band = new BandSelection(100, 160).Resize(-500, 300);
+
+            TestRunner.Near(100, band.Start, 0.001, "始まり");
+            TestRunner.Near(0, band.Thickness, 0.001, "太さ 0 で止まる");
+        });
+
+        t.Case("微調整した帯はそのまま切る指示に渡せる", () =>
+        {
+            // 画面側で丸めず、確定時に ImageCutPlan へそのまま渡している。
+            // 帯の持ち方と受付条件がずれていないかを合わせて見る。
+            var band = new BandSelection(100, 160).Shift(-10, 300).Resize(4, 300);
+
+            var planned = ImageCutPlan.TryPlanBand(band.Start, band.End, 300, out var start, out var count, out _);
+
+            TestRunner.True(planned, "受け付けられる");
+            TestRunner.Equal(90, start, "抜き始める位置");
+            TestRunner.Equal(64, count, "抜く太さ");
+        });
+
+        t.Case("太さ 0 まで縮めた帯は受け付けない", () =>
+        {
+            var band = new BandSelection(100, 160).Resize(-60, 300);
+
+            var planned = ImageCutPlan.TryPlanBand(
+                band.Start, band.End, 300, out _, out _, out var problem);
+
+            TestRunner.True(!planned, "切らない");
+            TestRunner.NotNull(problem, "理由が付く");
+        });
     }
 
     // ================================================================ 画像を切る

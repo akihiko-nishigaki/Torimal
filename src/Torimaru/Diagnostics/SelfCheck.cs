@@ -448,7 +448,7 @@ public static class SelfCheck
 
         // 画面そのものを組み立ててみる。XAML の書き間違いや
         // 組み立て中の例外は、ここを通さないと起動して初めて分かる。
-        Check("編集画面を組み立てられる（画像を切るツールが並ぶ）", () =>
+        Check("編集画面を組み立てられる（画像を切るツールと確定待ちの部品が揃う）", () =>
         {
             var editor = new EditorWindow(
                 Path.Combine(outputFolder, "editor-probe.png"),
@@ -463,8 +463,16 @@ public static class SelfCheck
 
                 var adorner = editor.FindName("RegionAdorner") is System.Windows.Shapes.Rectangle;
 
-                report.AppendLine($"       ツール: {found} / {tools.Length} 個 / 範囲表示: {adorner}");
-                return found == tools.Length && adorner;
+                // 中抜きは確定待ちの帯をつまんで微調整するので、その部品も揃っているか見る
+                var band = editor.FindName("BandGripA") is System.Windows.Shapes.Rectangle
+                    && editor.FindName("BandGripB") is System.Windows.Shapes.Rectangle
+                    && editor.FindName("BandBar") is System.Windows.Controls.Border;
+
+                report.AppendLine(
+                    $"       ツール: {found} / {tools.Length} 個 / 範囲表示: {adorner}"
+                    + $" / 確定待ちの部品: {band}");
+
+                return found == tools.Length && adorner && band;
             }
             finally
             {

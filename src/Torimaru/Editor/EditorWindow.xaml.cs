@@ -18,8 +18,9 @@ public partial class EditorWindow : Window
 {
     private const string SelectTool = "Select";
 
-    // 画像そのものを切るツール。注釈を置くツールとは別扱いで、
-    // ドラッグで範囲を決めたら即その場で画像に反映する。
+    // 画像そのものを切るツール。注釈を置くツールとは別扱い。
+    // トリミングはドラッグし終えた時点で切るが、
+    // 中抜きは抜く帯を微調整してから確定させる（ドラッグ一発では細かい位置を決められない）。
     private const string CropTool = "Crop";
     private const string CutRowsTool = "CutRows";
     private const string CutColumnsTool = "CutColumns";
@@ -27,6 +28,10 @@ public partial class EditorWindow : Window
     /// <summary>画像を切るツールか（＝図形を作らないツールか）。</summary>
     private static bool IsImageTool(string tool)
         => tool is CropTool or CutRowsTool or CutColumnsTool;
+
+    /// <summary>中抜き（帯を抜くツール）か。確定の手順を踏む。</summary>
+    private static bool IsBandTool(string tool)
+        => tool is CutRowsTool or CutColumnsTool;
 
     /// <summary>
     /// 元に戻すための 1 手分。
@@ -91,6 +96,21 @@ public partial class EditorWindow : Window
     /// <summary>トリミング・中抜きの範囲をドラッグ中。</summary>
     private bool _regionDragging;
     private Point _regionOrigin;
+
+    /// <summary>
+    /// 中抜きの確定待ちの帯。ドラッグし終えてもすぐには切らず、
+    /// つまみやキーで微調整してから確定させる。
+    /// </summary>
+    private BandSelection? _band;
+
+    /// <summary>確定待ちの帯がどちらの向きか（CutRowsTool / CutColumnsTool）。</summary>
+    private string _bandTool = CutRowsTool;
+
+    /// <summary>いまつまんでいる辺。</summary>
+    private BandGrip _bandGrip = BandGrip.None;
+
+    /// <summary>帯ごと動かすとき、掴んだ位置が帯の始まりからどれだけ内側かを覚えておく。</summary>
+    private double _bandGripOffset;
 
     /// <summary>
     /// この編集中に一度でも下地を切ったか。
@@ -161,6 +181,9 @@ public partial class EditorWindow : Window
         RedoButton.IsEnabled = _redo.Count > 0;
 
         UpdateSelectionAdorner();
+
+        // 倍率が変わっても、確定待ちの帯が画像の同じ場所に乗っているようにする
+        LayoutBand();
     }
 
     /// <summary>吹き出しのつまみ（先端）の当たり判定。画面上で約 11px 相当。</summary>
@@ -239,6 +262,10 @@ public partial class EditorWindow : Window
     private void SelectTool_(string tool)
     {
         CommitInlineText();
+
+        // 別のツールへ移るときは確定待ちを捨てる（帯だけ残しても確定できない）
+        ClearBand();
+
         _tool = tool;
 
         foreach (var toggle in new[]
@@ -272,10 +299,10 @@ public partial class EditorWindow : Window
                 UpdateStatus("トリミング: 残したい範囲をドラッグしてください（Esc で中止）");
                 break;
             case CutRowsTool:
-                UpdateStatus("縦に中抜き: 消したい中間部分を上下にドラッグしてください（Esc で中止）");
+                UpdateStatus("縦に中抜き: 消したい中間部分を上下にドラッグ → 微調整 → Enter で確定（Esc で中止）");
                 break;
             case CutColumnsTool:
-                UpdateStatus("横に中抜き: 消したい中間部分を左右にドラッグしてください（Esc で中止）");
+                UpdateStatus("横に中抜き: 消したい中間部分を左右にドラッグ → 微調整 → Enter で確定（Esc で中止）");
                 break;
         }
     }
@@ -681,6 +708,31 @@ public partial class EditorWindow : Window
         {
             // ScrollViewer にフォーカスを奪われると Esc での中止が効かなくなる
             e.Handled = true;
+
+            // 確定待ちの帯があるなら、まずはその微調整として扱う
+            if (_band is { } pending && _bandTool == _tool)
+            {
+                if (e.ClickCount == 2)
+                {
+                    ConfirmBand();
+                    return;
+                }
+
+                var axis = BandAxis(point);
+                var grip = pending.HitTest(axis, GripTolerance);
+
+                if (grip != BandGrip.None)
+                {
+                    _bandGrip = grip;
+                    _bandGripOffset = axis - pending.Start;
+                    CanvasHost.CaptureMouse();
+                    return;
+                }
+
+                // 帯の外を掴んだときは引き直し
+            }
+
+            ClearBand();
             _regionDragging = true;
             _regionOrigin = point;
             CanvasHost.CaptureMouse();
@@ -776,6 +828,18 @@ public partial class EditorWindow : Window
 
         PositionText.Text = $"{point.X,5:F0}, {point.Y,-5:F0}";
 
+        if (_bandGrip != BandGrip.None && _band is { } adjusting)
+        {
+            var axis = BandAxis(point);
+
+            _band = _bandGrip == BandGrip.Whole
+                ? adjusting.MoveTo(axis - _bandGripOffset, BandTotal)
+                : adjusting.MoveEdge(_bandGrip, axis, BandTotal);
+
+            ShowBand();
+            return;
+        }
+
         if (_regionDragging)
         {
             UpdateRegionAdorner(point);
@@ -820,11 +884,28 @@ public partial class EditorWindow : Window
     {
         CanvasHost.ReleaseMouseCapture();
 
+        if (_bandGrip != BandGrip.None)
+        {
+            // つまみを離しただけ。確定待ちはそのまま続ける
+            _bandGrip = BandGrip.None;
+            return;
+        }
+
         if (_regionDragging)
         {
             _regionDragging = false;
+
+            var end = ToImagePoint(e.GetPosition(CanvasHost));
+
+            if (IsBandTool(_tool))
+            {
+                // 中抜きは離した時点では切らない。微調整してから確定させる
+                BeginBand(_regionOrigin, end);
+                return;
+            }
+
             RegionAdorner.Visibility = Visibility.Collapsed;
-            ApplyImageTool(_regionOrigin, ToImagePoint(e.GetPosition(CanvasHost)));
+            ApplyImageTool(_regionOrigin, end);
             return;
         }
 
@@ -930,8 +1011,168 @@ public partial class EditorWindow : Window
         CanvasHost.ReleaseMouseCapture();
     }
 
-    /// <summary>ドラッグし終えた範囲を実際に画像へ反映する。</summary>
-    private void ApplyImageTool(Point from, Point to)
+    // ------------------------------------------------- 中抜きの確定待ち
+
+    /// <summary>辺をつまんだと見なす距離。画面上で約 7px 相当。</summary>
+    private double GripTolerance => 7 / Math.Max(0.1, DisplayScale);
+
+    /// <summary>いま抜こうとしている向きでの画像の長さ。</summary>
+    private int BandTotal
+        => _bandTool == CutColumnsTool ? _baseImage.PixelWidth : _baseImage.PixelHeight;
+
+    /// <summary>中抜きで意味を持つ側の座標だけ取り出す。</summary>
+    private double BandAxis(Point point) => _bandTool == CutColumnsTool ? point.X : point.Y;
+
+    /// <summary>ドラッグし終えた範囲を、確定待ちの帯として置く。</summary>
+    private void BeginBand(Point from, Point to)
+    {
+        _bandTool = _tool;
+        _bandGrip = BandGrip.None;
+        _band = BandSelection.FromDrag(BandAxis(from), BandAxis(to), BandTotal);
+        ShowBand();
+    }
+
+    /// <summary>確定待ちの帯を見せ直して、太さと次にすることを伝える。</summary>
+    private void ShowBand()
+    {
+        if (_band is not { } band)
+        {
+            return;
+        }
+
+        LayoutBand();
+
+        var total = BandTotal;
+        var count = (int)Math.Round(band.Thickness);
+
+        UpdateStatus(_bandTool == CutColumnsTool
+            ? $"抜く幅: {count} px → 残り {total - count} px ／ 端をドラッグか ← → で微調整 → Enter で確定（Esc で中止）"
+            : $"抜く高さ: {count} px → 残り {total - count} px ／ 端をドラッグか ↑ ↓ で微調整 → Enter で確定（Esc で中止）");
+    }
+
+    /// <summary>確定待ちの帯・つまみ・確定バーを、今の表示倍率に合わせて置き直す。</summary>
+    private void LayoutBand()
+    {
+        if (_band is not { } band)
+        {
+            return;
+        }
+
+        // 縦に中抜き＝横向きの帯。意味を持たない側は画像いっぱいに広げる
+        var acrossWidth = _bandTool != CutColumnsTool;
+        var canvasWidth = _baseImage.PixelWidth * DisplayScale;
+        var canvasHeight = _baseImage.PixelHeight * DisplayScale;
+        var from = band.Start * DisplayScale;
+        var to = band.End * DisplayScale;
+        var thickness = Math.Max(1, to - from);
+
+        RegionAdorner.Stroke = CutStroke;
+        RegionAdorner.Fill = CutFill;
+        Canvas.SetLeft(RegionAdorner, acrossWidth ? 0 : from);
+        Canvas.SetTop(RegionAdorner, acrossWidth ? from : 0);
+        RegionAdorner.Width = acrossWidth ? canvasWidth : thickness;
+        RegionAdorner.Height = acrossWidth ? thickness : canvasHeight;
+        RegionAdorner.Visibility = Visibility.Visible;
+
+        PlaceGrip(BandGripA, acrossWidth, from, canvasWidth, canvasHeight);
+        PlaceGrip(BandGripB, acrossWidth, to, canvasWidth, canvasHeight);
+
+        // 確定バーは帯の中央へ。画像の端にかかるときは内側へ寄せる
+        var left = acrossWidth
+            ? (canvasWidth - BandBar.Width) / 2
+            : ((from + to) / 2) - (BandBar.Width / 2);
+        var top = acrossWidth
+            ? ((from + to) / 2) - (BandBar.Height / 2)
+            : (canvasHeight - BandBar.Height) / 2;
+
+        Canvas.SetLeft(BandBar, Math.Clamp(left, 0, Math.Max(0, canvasWidth - BandBar.Width)));
+        Canvas.SetTop(BandBar, Math.Clamp(top, 0, Math.Max(0, canvasHeight - BandBar.Height)));
+        BandBar.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>帯の端のつまみを置く。帯と直角の向きには画像いっぱいに伸ばす。</summary>
+    private static void PlaceGrip(
+        System.Windows.Shapes.Rectangle grip,
+        bool acrossWidth,
+        double at,
+        double width,
+        double height)
+    {
+        const double Size = 7;
+
+        Canvas.SetLeft(grip, acrossWidth ? 0 : at - (Size / 2));
+        Canvas.SetTop(grip, acrossWidth ? at - (Size / 2) : 0);
+        grip.Width = acrossWidth ? width : Size;
+        grip.Height = acrossWidth ? Size : height;
+        grip.Visibility = Visibility.Visible;
+    }
+
+    private void OnConfirmBand(object sender, RoutedEventArgs e) => ConfirmBand();
+
+    private void OnCancelBand(object sender, RoutedEventArgs e) => ClearBand("中止しました");
+
+    /// <summary>
+    /// 確定待ちの帯を実際に抜く。
+    /// 受け付けられない帯のときは理由を出して、確定待ちのまま微調整させる。
+    /// </summary>
+    private void ConfirmBand()
+    {
+        if (_band is not { } band)
+        {
+            return;
+        }
+
+        var sideways = _bandTool == CutColumnsTool;
+        var from = sideways ? new Point(band.Start, 0) : new Point(0, band.Start);
+        var to = sideways ? new Point(band.End, 0) : new Point(0, band.End);
+
+        // 切ると寸法が変わる。描き直しのたびに古い帯が出ないよう、先に外しておく
+        _band = null;
+        HideBandParts();
+
+        if (!ApplyImageTool(from, to))
+        {
+            _band = band;
+            ShowBand();
+            return;
+        }
+
+        _bandGrip = BandGrip.None;
+    }
+
+    /// <summary>確定待ちをやめる。ツールは選んだままにして、すぐ引き直せるようにする。</summary>
+    private void ClearBand(string? message = null)
+    {
+        var had = _band is not null;
+
+        if (_bandGrip != BandGrip.None)
+        {
+            CanvasHost.ReleaseMouseCapture();
+        }
+
+        _band = null;
+        _bandGrip = BandGrip.None;
+        HideBandParts();
+
+        if (had && message is not null)
+        {
+            UpdateStatus(message);
+        }
+    }
+
+    private void HideBandParts()
+    {
+        RegionAdorner.Visibility = Visibility.Collapsed;
+        BandGripA.Visibility = Visibility.Collapsed;
+        BandGripB.Visibility = Visibility.Collapsed;
+        BandBar.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// 指定された範囲を実際に画像へ反映する。
+    /// 受け付けられない範囲だったときは、理由をステータスに出して false を返す。
+    /// </summary>
+    private bool ApplyImageTool(Point from, Point to)
     {
         var width = _baseImage.PixelWidth;
         var height = _baseImage.PixelHeight;
@@ -945,7 +1186,7 @@ public partial class EditorWindow : Window
                 if (!ImageCutPlan.TryPlanCrop(dragged, width, height, out var crop, out var problem))
                 {
                     UpdateStatus($"トリミング: {problem}");
-                    return;
+                    return false;
                 }
 
                 ApplyCut(
@@ -953,7 +1194,7 @@ public partial class EditorWindow : Window
                     AnnotationTransform.Crop(
                         _document, new PixelRect(crop.X, crop.Y, crop.Width, crop.Height)),
                     $"トリミングしました: {crop.Width} x {crop.Height} px");
-                return;
+                return true;
             }
 
             case CutRowsTool:
@@ -961,14 +1202,14 @@ public partial class EditorWindow : Window
                 if (!ImageCutPlan.TryPlanBand(from.Y, to.Y, height, out var start, out var count, out var problem))
                 {
                     UpdateStatus($"縦に中抜き: {problem}");
-                    return;
+                    return false;
                 }
 
                 ApplyCut(
                     ImageEditing.RemoveRows(_baseImage, start, count),
                     AnnotationTransform.RemoveRows(_document, start, count),
                     $"縦に {count} px 抜きました: {width} x {height - count} px");
-                return;
+                return true;
             }
 
             case CutColumnsTool:
@@ -976,16 +1217,18 @@ public partial class EditorWindow : Window
                 if (!ImageCutPlan.TryPlanBand(from.X, to.X, width, out var start, out var count, out var problem))
                 {
                     UpdateStatus($"横に中抜き: {problem}");
-                    return;
+                    return false;
                 }
 
                 ApplyCut(
                     ImageEditing.RemoveColumns(_baseImage, start, count),
                     AnnotationTransform.RemoveColumns(_document, start, count),
                     $"横に {count} px 抜きました: {width - count} x {height} px");
-                return;
+                return true;
             }
         }
+
+        return false;
     }
 
     /// <summary>切った下地と、付け替えた注釈を 1 手として反映する。</summary>
@@ -1340,6 +1583,9 @@ public partial class EditorWindow : Window
 
     private void ApplySnapshot(EditorSnapshot snapshot)
     {
+        // 寸法が変わるので、確定待ちの帯は残さない
+        ClearBand();
+
         _baseImage = snapshot.Image;
         _document = AnnotationDocument.FromJson(snapshot.DocumentJson) ?? new AnnotationDocument();
         _selected = null;
@@ -1613,6 +1859,39 @@ public partial class EditorWindow : Window
             return;
         }
 
+        // 確定待ちの帯は、キーでも微調整できるようにする
+        if (_band is { } pendingBand)
+        {
+            var sideways = _bandTool == CutColumnsTool;
+            var step = e.Key switch
+            {
+                Key.Up when !sideways => -1.0,
+                Key.Down when !sideways => 1.0,
+                Key.Left when sideways => -1.0,
+                Key.Right when sideways => 1.0,
+                _ => 0.0,
+            };
+
+            if (step != 0)
+            {
+                // Shift を押していれば太さを変える。押していなければ帯ごと動かす
+                _band = (Keyboard.Modifiers & ModifierKeys.Shift) != 0
+                    ? pendingBand.Resize(step, BandTotal)
+                    : pendingBand.Shift(step, BandTotal);
+
+                ShowBand();
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Key.Enter)
+            {
+                ConfirmBand();
+                e.Handled = true;
+                return;
+            }
+        }
+
         switch (e.Key)
         {
             case Key.Delete or Key.Back:
@@ -1620,7 +1899,11 @@ public partial class EditorWindow : Window
                 e.Handled = true;
                 break;
             case Key.Escape:
-                if (_regionDragging)
+                if (_band is not null)
+                {
+                    ClearBand("中止しました");
+                }
+                else if (_regionDragging)
                 {
                     CancelRegionDrag();
                     UpdateStatus("中止しました");
