@@ -49,7 +49,9 @@ public sealed class CaptureWorkflow
             var windows = WindowFinder.EnumerateVisibleWindows();
             var image = ScreenCapturer.CaptureVirtualScreen(_settings.CaptureCursor);
 
-            var selector = new RegionSelectorWindow(image, windows, _settings.MagnifierZoom);
+            var selector = new RegionSelectorWindow(
+                image, windows, _settings.MagnifierZoom, SelectionPurpose.Region, RecallRect(image));
+
             var selected = selector.ShowDialog() == true ? selector.Result : null;
 
             if (restoreWorkspace)
@@ -62,6 +64,7 @@ public sealed class CaptureWorkflow
                 return;
             }
 
+            RememberRegion(ToVirtual(image, selected.Value));
             Finish(image.Crop(selected.Value));
         }
         catch (Exception ex)
@@ -93,11 +96,62 @@ public sealed class CaptureWorkflow
                 _workspace?.Show();
             }
 
+            RememberRegion(ToVirtual(image, image.FullBounds));
             Finish(image.Crop(image.FullBounds));
         }
         catch (Exception ex)
         {
             Fail("キャプチャに失敗しました", ex);
+        }
+        finally
+        {
+            _capturing = false;
+        }
+    }
+
+    /// <summary>
+    /// 前回撮った範囲をそのまま撮り直す。範囲を選ぶ手間が無いので、
+    /// 同じ場所を何枚も撮るときに使う。
+    /// </summary>
+    public async void CaptureLastRegion()
+    {
+        if (_capturing)
+        {
+            return;
+        }
+
+        var (screenX, screenY, screenWidth, screenHeight) = ScreenCapturer.GetVirtualScreenBounds();
+
+        // 覚えた範囲が今の画面に収まらないなら、黙って違う場所を撮らずに選び直させる
+        if (RegionMemory.Resolve(_settings.LastRegion, screenX, screenY, screenWidth, screenHeight)
+            is not { } region)
+        {
+            var reason = RegionMemory.ExplainMismatch(
+                _settings.LastRegion, screenX, screenY, screenWidth, screenHeight);
+
+            Notify?.Invoke($"{reason}。範囲を選んでください");
+            CaptureInteractive();
+            return;
+        }
+
+        _capturing = true;
+        try
+        {
+            var restoreWorkspace = await HideWorkspaceAsync();
+            var image = ScreenCapturer.CaptureVirtualScreen(_settings.CaptureCursor);
+
+            if (restoreWorkspace)
+            {
+                _workspace?.Show();
+            }
+
+            Finish(
+                image.Crop(ToImage(image, region)),
+                $"前回と同じ範囲で撮りました（{region.Width:0} x {region.Height:0} px）");
+        }
+        catch (Exception ex)
+        {
+            Fail("前回と同じ範囲でキャプチャできませんでした", ex);
         }
         finally
         {
@@ -139,7 +193,7 @@ public sealed class CaptureWorkflow
             var image = ScreenCapturer.CaptureVirtualScreen(includeCursor: false);
 
             var selector = new RegionSelectorWindow(
-                image, windows, _settings.MagnifierZoom, SelectionPurpose.ScrollTarget);
+                image, windows, _settings.MagnifierZoom, SelectionPurpose.ScrollTarget, RecallRect(image));
 
             var selected = selector.ShowDialog() == true ? selector.Result : null;
 
@@ -154,11 +208,8 @@ public sealed class CaptureWorkflow
             }
 
             // 画像座標 → 仮想画面座標（この後は実画面を直接撮るため）
-            var region = new PixelRect(
-                selected.Value.X + image.OriginX,
-                selected.Value.Y + image.OriginY,
-                selected.Value.Width,
-                selected.Value.Height);
+            var region = ToVirtual(image, selected.Value);
+            RememberRegion(region);
 
             var proceed = MessageBox.Show(
                 "この範囲をスクロールしながら撮影します。\n\n"
@@ -229,7 +280,7 @@ public sealed class CaptureWorkflow
             var image = ScreenCapturer.CaptureVirtualScreen(includeCursor: false);
 
             var selector = new RegionSelectorWindow(
-                image, windows, _settings.MagnifierZoom, SelectionPurpose.RecordTarget);
+                image, windows, _settings.MagnifierZoom, SelectionPurpose.RecordTarget, RecallRect(image));
 
             var selected = selector.ShowDialog() == true ? selector.Result : null;
 
@@ -243,11 +294,8 @@ public sealed class CaptureWorkflow
                 return;
             }
 
-            var region = new PixelRect(
-                selected.Value.X + image.OriginX,
-                selected.Value.Y + image.OriginY,
-                selected.Value.Width,
-                selected.Value.Height);
+            var region = ToVirtual(image, selected.Value);
+            RememberRegion(region);
 
             // オーバーレイが消えて画面が描き直されるのを待つ
             await Task.Delay(220);
@@ -440,6 +488,60 @@ public sealed class CaptureWorkflow
 
         return false;
     }
+
+    /// <summary>画像ピクセル座標の範囲を仮想画面座標へ移す。</summary>
+    private static PixelRect ToVirtual(CapturedImage image, PixelRect imageRect)
+        => new(
+            imageRect.X + image.OriginX,
+            imageRect.Y + image.OriginY,
+            imageRect.Width,
+            imageRect.Height);
+
+    /// <summary>仮想画面座標の範囲を画像ピクセル座標へ移す。</summary>
+    private static PixelRect ToImage(CapturedImage image, PixelRect virtualRect)
+        => new(
+            virtualRect.X - image.OriginX,
+            virtualRect.Y - image.OriginY,
+            virtualRect.Width,
+            virtualRect.Height);
+
+    /// <summary>
+    /// 撮った範囲を覚えて設定に残す。
+    ///
+    /// 静止画・スクロール・録画のどの経路からも通すので、
+    /// 「前回と同じ範囲」は常に最後に選んだ範囲になる。
+    /// </summary>
+    private void RememberRegion(PixelRect virtualRect)
+    {
+        var before = _settings.LastRegion;
+        _settings.RememberRegion(virtualRect);
+
+        // 範囲として成立しなかった場合は覚えていない。書き込む必要もない
+        if (ReferenceEquals(before, _settings.LastRegion))
+        {
+            return;
+        }
+
+        try
+        {
+            _settings.Save();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // 覚えられなくてもキャプチャ自体は成立しているので、記録だけして進む
+            AppLog.Error("前回の範囲を保存できませんでした", ex);
+        }
+    }
+
+    /// <summary>
+    /// オーバーレイ上で「前回と同じ範囲」を呼べるようにするための範囲（画像座標）。
+    /// 今撮った画面に収まらない場合は null（呼べないようにする）。
+    /// </summary>
+    private PixelRect? RecallRect(CapturedImage image)
+        => RegionMemory.Resolve(
+            _settings.LastRegion, image.OriginX, image.OriginY, image.Width, image.Height) is { } region
+            ? ToImage(image, region)
+            : null;
 
     /// <summary>
     /// ワークスペースは常時手前に出ているため、写り込まないよう一時的に隠す。

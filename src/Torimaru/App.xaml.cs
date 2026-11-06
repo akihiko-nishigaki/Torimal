@@ -24,6 +24,9 @@ public partial class App : Application
     private readonly Dictionary<string, System.Windows.Forms.ToolStripMenuItem> _hotKeyMenuItems = [];
     private string _hotKeySummary = "ホットキーはまだ登録されていません。";
 
+    /// <summary>「前回と同じ範囲」の項目。開くたびに覚えている大きさを書き込む。</summary>
+    private System.Windows.Forms.ToolStripMenuItem? _lastRegionItem;
+
     private void OnStartup(object sender, StartupEventArgs e)
     {
         // 自己診断モード: GUI を出さずに描画・保存経路を通して結果を出力する。
@@ -92,6 +95,7 @@ public partial class App : Application
         _hotKeys.UnregisterAll();
 
         var region = RegisterAction(HotKeyActions.CaptureRegion, () => _workflow?.CaptureInteractive());
+        RegisterAction(HotKeyActions.CaptureLastRegion, () => _workflow?.CaptureLastRegion());
         RegisterAction(HotKeyActions.CaptureAllScreens, () => _workflow?.CaptureAllScreens());
         RegisterAction(HotKeyActions.CaptureScrolling, () => _workflow?.CaptureScrolling());
         RegisterAction(HotKeyActions.CaptureDelayed, () => _workflow?.CaptureDelayed());
@@ -185,6 +189,12 @@ public partial class App : Application
 
         // 第 3 引数は SetupHotKeys 側の登録名。一致する項目の右側に実際のキーを表示する。
         AddMenuItem(menu, "キャプチャ（範囲・ウィンドウ）", HotKeyActions.CaptureRegion.DisplayName, () => _workflow?.CaptureInteractive());
+        _lastRegionItem = AddMenuItem(
+            menu,
+            "前回と同じ範囲でキャプチャ",
+            HotKeyActions.CaptureLastRegion.DisplayName,
+            () => _workflow?.CaptureLastRegion());
+
         AddMenuItem(menu, "全画面をキャプチャ", HotKeyActions.CaptureAllScreens.DisplayName, () => _workflow?.CaptureAllScreens());
         AddMenuItem(menu, "スクロールキャプチャ", HotKeyActions.CaptureScrolling.DisplayName, () => _workflow?.CaptureScrolling());
         AddMenuItem(
@@ -206,6 +216,10 @@ public partial class App : Application
         AddMenuItem(menu, "ログを開く", null, OpenLogFile);
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         AddMenuItem(menu, "終了", null, () => Shutdown());
+
+        // 覚えている範囲は撮るたびに変わるので、メニューを開く直前に書き直す
+        menu.Opening += (_, _) => RefreshLastRegionItem();
+        RefreshLastRegionItem();
 
         _tray = new System.Windows.Forms.NotifyIcon
         {
@@ -237,6 +251,26 @@ public partial class App : Application
 
         menu.Items.Add(item);
         return item;
+    }
+
+    /// <summary>覚えている範囲の大きさをメニューに出す。</summary>
+    private void RefreshLastRegionItem()
+    {
+        if (_lastRegionItem is null)
+        {
+            return;
+        }
+
+        if (_settings.LastRegion is { IsUsable: true } region)
+        {
+            _lastRegionItem.Text = $"前回と同じ範囲でキャプチャ（{region.Width} x {region.Height}）";
+            _lastRegionItem.ToolTipText = region.Describe();
+        }
+        else
+        {
+            _lastRegionItem.Text = "前回と同じ範囲でキャプチャ（まだありません）";
+            _lastRegionItem.ToolTipText = "一度キャプチャすると、その範囲を覚えます。";
+        }
     }
 
     /// <summary>登録できた実際のキーをメニュー項目の右側に表示する。</summary>

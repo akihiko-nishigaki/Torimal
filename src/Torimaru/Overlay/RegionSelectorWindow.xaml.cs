@@ -42,6 +42,12 @@ public partial class RegionSelectorWindow : Window
     private readonly int _cropSize = 31;
     private readonly SelectionPurpose _purpose;
 
+    /// <summary>
+    /// R キーで呼び出せる「前回と同じ範囲」（画像ピクセル座標）。
+    /// 今の画面に収まらない場合は呼び出し側が null を渡す。
+    /// </summary>
+    private readonly PixelRect? _recall;
+
     private double _scale = 1;
     private bool _dragging;
     private Point _dragStart;
@@ -52,24 +58,34 @@ public partial class RegionSelectorWindow : Window
         CapturedImage image,
         IReadOnlyList<WindowInfo> windows,
         int magnifierZoom,
-        SelectionPurpose purpose = SelectionPurpose.Region)
+        SelectionPurpose purpose = SelectionPurpose.Region,
+        PixelRect? recall = null)
     {
         _image = image;
         _windows = windows;
         _magnifierZoom = Math.Clamp(magnifierZoom, 2, 20);
         _purpose = purpose;
+        _recall = recall;
 
         InitializeComponent();
 
         Screenshot.Source = image.Source;
+
+        // 前回の範囲を呼べるときだけ、その案内を足す（押せないキーは出さない）
+        var recallHint = _recall is { } last && purpose != SelectionPurpose.Color
+            ? $"　R=前回と同じ範囲 ({last.Width:0}x{last.Height:0})"
+            : string.Empty;
+
         HintText.Text = purpose switch
         {
             SelectionPurpose.Color => "クリック=その色を採取（クリップボードへコピー）　Esc=中止",
             SelectionPurpose.ScrollTarget =>
-                "スクロールさせたい範囲をドラッグ　クリック=ウィンドウ全体　Esc=中止",
+                "スクロールさせたい範囲をドラッグ　クリック=ウィンドウ全体" + recallHint + "　Esc=中止",
             SelectionPurpose.RecordTarget =>
-                "録画する範囲をドラッグ　クリック=ウィンドウ　Space=このモニタ全体　Esc=中止",
-            _ => "ドラッグ=範囲選択　クリック=ウィンドウ　Space=このモニタ全体　F=全画面　Esc=中止",
+                "録画する範囲をドラッグ　クリック=ウィンドウ　Space=このモニタ全体"
+                + recallHint + "　Esc=中止",
+            _ => "ドラッグ=範囲選択　クリック=ウィンドウ　Space=このモニタ全体　F=全画面"
+                 + recallHint + "　Esc=中止",
         };
     }
 
@@ -451,6 +467,11 @@ public partial class RegionSelectorWindow : Window
 
             case Key.F:
                 Commit(_image.FullBounds);
+                e.Handled = true;
+                break;
+
+            case Key.R when _recall is { } recall:
+                Commit(recall);
                 e.Handled = true;
                 break;
         }

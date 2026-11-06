@@ -20,6 +20,12 @@ public sealed class AppSettings
     /// <summary>キャプチャ直後にエディタを開くか。</summary>
     public bool OpenEditorAfterCapture { get; set; } = true;
 
+    /// <summary>
+    /// 最後に撮った範囲（仮想画面の物理ピクセル）。null は未記録。
+    /// 「前回と同じ範囲でキャプチャ」で使う。
+    /// </summary>
+    public SavedRegion? LastRegion { get; set; }
+
     /// <summary>注釈のデフォルト色（#AARRGGBB）。</summary>
     public string DefaultColor { get; set; } = "#FFE53935";
 
@@ -37,6 +43,14 @@ public sealed class AppSettings
     /// 空リストは「ひとつも要らない」という意思表示なので、勝手に埋め直さない。
     /// </summary>
     public List<string>? FavoriteFonts { get; set; }
+
+    /// <summary>
+    /// 「よく使う描き方」のプリセット。
+    /// null は「まだ一度も作っていない」で、この場合だけ初期セットを入れる。
+    /// 空リストは「全部消した」という意思表示なので、勝手に埋め直さない
+    /// （<see cref="FavoriteFonts"/> と同じ扱い）。
+    /// </summary>
+    public List<StylePreset>? StylePresets { get; set; }
 
     /// <summary>範囲選択中のルーペ倍率。</summary>
     public int MagnifierZoom { get; set; } = 8;
@@ -104,6 +118,20 @@ public sealed class AppSettings
             HotKeys.Remove(actionId);
         }
     }
+
+    /// <summary>撮った範囲を覚える。範囲として成立しないものは覚えない。</summary>
+    public void RememberRegion(PixelRect virtualRect)
+    {
+        if (SavedRegion.From(virtualRect) is { } region)
+        {
+            LastRegion = region;
+        }
+    }
+
+    /// <summary>
+    /// プリセット一覧を返す。一度も作っていなければ初期セットを入れてから返す。
+    /// </summary>
+    public List<StylePreset> EnsureStylePresets() => StylePresets ??= StylePreset.Defaults();
 
     public static string DefaultSaveFolder()
         => Path.Combine(
@@ -185,6 +213,19 @@ public sealed class AppSettings
                 .Take(40)
                 .ToList();
         }
+        // 使えないプリセットが混ざっていると、押しても何も起きない項目が並ぶ。
+        // null（一度も作っていない）はそのまま残す（初期セットを入れるのは使う側の判断）。
+        if (StylePresets is not null)
+        {
+            StylePresets = StylePreset.SanitizeList(StylePresets);
+        }
+
+        // 0 ピクセルの範囲は撮れないので、覚えていないことにする
+        if (LastRegion is { IsUsable: false })
+        {
+            LastRegion = null;
+        }
+
         MagnifierZoom = Math.Clamp(MagnifierZoom, 2, 20);
         DelaySeconds = Math.Clamp(DelaySeconds, 1, 60);
         ScrollNotches = Math.Clamp(ScrollNotches, 1, 10);

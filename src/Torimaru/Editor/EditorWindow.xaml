@@ -84,6 +84,34 @@
       <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
 
+    <!-- プリセットの 1 個分。地色はコード側で変えられるようにしておく -->
+    <Style x:Key="PresetButton" TargetType="Button">
+      <Setter Property="Height" Value="26" />
+      <Setter Property="Margin" Value="0,0,4,0" />
+      <Setter Property="Padding" Value="8,0" />
+      <Setter Property="Background" Value="#FFFFFFFF" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd"
+                    Background="{TemplateBinding Background}"
+                    BorderBrush="#FFD5D5D5"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="#FFEFF5FE" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
     <Style x:Key="SwatchButton" TargetType="Button">
       <Setter Property="Width" Value="22" />
       <Setter Property="Height" Value="22" />
@@ -247,6 +275,37 @@
                 Content="100%" MinWidth="52" ToolTip="クリックで 100%" />
         <Button Style="{StaticResource BarButton}" Click="OnZoomIn" Content="＋" MinWidth="30" />
         <Button Style="{StaticResource BarButton}" Click="OnZoomFit" Content="全体" MinWidth="44" />
+
+      </WrapPanel>
+    </Border>
+
+    <!-- プリセット（よく使う描き方）。ツールと色・太さ・文字をまとめて呼び出す -->
+    <Border DockPanel.Dock="Top"
+            Background="#FFFCFCFC"
+            BorderBrush="#FFE0E0E0"
+            BorderThickness="0,0,0,1"
+            Padding="10,5">
+      <WrapPanel Orientation="Horizontal">
+
+        <TextBlock Text="プリセット"
+                   VerticalAlignment="Center"
+                   Margin="0,0,8,0"
+                   Foreground="#FF555555" />
+
+        <!-- 保存済みのプリセットは件数が変わるのでコード側で並べる -->
+        <StackPanel x:Name="PresetStrip" Orientation="Horizontal" VerticalAlignment="Center" />
+
+        <Button x:Name="AddPresetButton"
+                Style="{StaticResource BarButton}"
+                MinWidth="128"
+                Click="OnAddPreset"
+                Content="＋ 今の設定を登録"
+                ToolTip="いま選んでいるツール・色・太さ・文字の組み合わせに名前を付けて残す" />
+
+        <TextBlock x:Name="PresetHint"
+                   VerticalAlignment="Center"
+                   Margin="8,0,0,0"
+                   Foreground="#FF999999" />
 
       </WrapPanel>
     </Border>

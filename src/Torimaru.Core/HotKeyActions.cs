@@ -21,6 +21,11 @@ public static class HotKeyActions
         "範囲キャプチャ",
         ["PrintScreen", "Ctrl+Shift+PrintScreen", "Ctrl+Shift+S"]);
 
+    public static readonly HotKeyAction CaptureLastRegion = new(
+        "CaptureLastRegion",
+        "前回と同じ範囲",
+        ["Shift+PrintScreen", "Ctrl+Shift+Q", "Ctrl+Alt+Q"]);
+
     public static readonly HotKeyAction CaptureAllScreens = new(
         "CaptureAllScreens",
         "全画面キャプチャ",
@@ -55,6 +60,7 @@ public static class HotKeyActions
     public static readonly HotKeyAction[] All =
     [
         CaptureRegion,
+        CaptureLastRegion,
         CaptureAllScreens,
         CaptureScrolling,
         CaptureDelayed,

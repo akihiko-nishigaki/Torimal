@@ -24,6 +24,8 @@ internal static class Program
         ImageSurgeryTests(t);
         AnnotationTransformTests(t);
         BandSelectionTests(t);
+        SavedRegionTests(t);
+        StylePresetTests(t);
 
         return t.Report();
     }
@@ -802,6 +804,96 @@ internal static class Program
                 TestRunner.Equal("#FF00FF00", loaded.DefaultColor, "既定色");
             });
 
+            t.Case("前回の範囲とプリセットを保存して読み戻せる", () =>
+            {
+                var file = Path.Combine(temp, "memory.json");
+                var saved = new AppSettings
+                {
+                    LastRegion = new SavedRegion { X = -120, Y = 40, Width = 800, Height = 600 },
+                    StylePresets =
+                    [
+                        new StylePreset
+                        {
+                            Name = "太い赤枠",
+                            Tool = ShapeKind.Rectangle,
+                            Color = "#FFE53935",
+                            Thickness = 8,
+                        },
+                    ],
+                };
+
+                saved.Save(file);
+                var loaded = AppSettings.Load(file);
+
+                TestRunner.NotNull(loaded.LastRegion, "範囲が残る");
+                TestRunner.Equal(-120, loaded.LastRegion!.X, "左（負の座標も保つ）");
+                TestRunner.Equal(600, loaded.LastRegion.Height, "高さ");
+
+                TestRunner.NotNull(loaded.StylePresets, "プリセットが残る");
+                TestRunner.Equal(1, loaded.StylePresets!.Count, "件数");
+                TestRunner.Equal("太い赤枠", loaded.StylePresets[0].Name, "名前");
+                TestRunner.Near(8, loaded.StylePresets[0].Thickness, 0.001, "太さ");
+            });
+
+            t.Case("0 ピクセルの範囲は覚えていないことにする", () =>
+            {
+                var file = Path.Combine(temp, "emptyregion.json");
+                new AppSettings
+                {
+                    LastRegion = new SavedRegion { X = 10, Y = 10, Width = 0, Height = 0 },
+                }.Save(file);
+
+                TestRunner.Null(AppSettings.Load(file).LastRegion, "読み戻すと消えている");
+            });
+
+            t.Case("プリセットを作っていない状態と、全部消した状態を区別する", () =>
+            {
+                // null は「初期セットを入れてよい」、空リストは「要らない」という意思表示
+                var untouched = Path.Combine(temp, "nopresets.json");
+                new AppSettings().Save(untouched);
+                TestRunner.Null(AppSettings.Load(untouched).StylePresets, "未設定は null のまま");
+
+                var cleared = Path.Combine(temp, "clearedpresets.json");
+                new AppSettings { StylePresets = [] }.Save(cleared);
+
+                var loaded = AppSettings.Load(cleared);
+                TestRunner.NotNull(loaded.StylePresets, "空リストは残る");
+                TestRunner.Equal(0, loaded.StylePresets!.Count, "空のまま");
+            });
+
+            t.Case("一度も作っていなければ初期セットが入る", () =>
+            {
+                var settings = new AppSettings();
+                TestRunner.Null(settings.StylePresets, "最初は未設定");
+
+                var presets = settings.EnsureStylePresets();
+                TestRunner.True(presets.Count > 0, "初期セットが入る");
+                TestRunner.NotNull(settings.StylePresets, "設定にも入る");
+
+                // 全部消した状態を呼び直しても埋め戻さない
+                settings.StylePresets = [];
+                TestRunner.Equal(0, settings.EnsureStylePresets().Count, "空のまま");
+            });
+
+            t.Case("壊れたプリセットは読み込み時に落ちる", () =>
+            {
+                var file = Path.Combine(temp, "brokenpresets.json");
+                new AppSettings
+                {
+                    StylePresets =
+                    [
+                        new StylePreset { Name = "使える", Tool = ShapeKind.Arrow },
+                        new StylePreset { Name = string.Empty, Tool = ShapeKind.Arrow },
+                        new StylePreset { Name = "謎ツール", Tool = "Nope" },
+                    ],
+                }.Save(file);
+
+                var loaded = AppSettings.Load(file).StylePresets;
+                TestRunner.NotNull(loaded, "一覧がある");
+                TestRunner.Equal(2, loaded!.Count, "名前の無いものだけ落ちる");
+                TestRunner.Equal(ShapeKind.Rectangle, loaded[1].Tool, "知らないツールは枠へ寄る");
+            });
+
             t.Case("設定ファイルが無ければ既定値を返す", () =>
             {
                 var loaded = AppSettings.Load(Path.Combine(temp, "missing.json"));
@@ -1230,6 +1322,260 @@ internal static class Program
                 // 後片付けの失敗でテストを落とさない
             }
         }
+    }
+
+    // ================================================================ 前回の範囲
+
+    private static void SavedRegionTests(TestRunner t)
+    {
+        t.Section("前回の範囲を覚える");
+
+        t.Case("撮った範囲を整数のピクセルで覚える", () =>
+        {
+            var region = SavedRegion.From(new PixelRect(100.4, 200.6, 300.2, 150.9));
+
+            TestRunner.NotNull(region, "覚えられる");
+            TestRunner.Equal(100, region!.X, "左");
+            TestRunner.Equal(200, region.Y, "上");
+
+            // 端は外側へ丸める（1 ピクセル欠けるより、含めるほうが実害が無い）
+            TestRunner.Equal(301, region.Width, "幅");
+            TestRunner.Equal(152, region.Height, "高さ");
+        });
+
+        t.Case("幅や高さが無い範囲は覚えない", () =>
+        {
+            TestRunner.Null(SavedRegion.From(new PixelRect(10, 10, 0, 50)), "幅 0");
+            TestRunner.Null(SavedRegion.From(new PixelRect(10, 10, 50, 0)), "高さ 0");
+        });
+
+        t.Case("そのまま収まる範囲はそのまま返る", () =>
+        {
+            var saved = new SavedRegion { X = 100, Y = 50, Width = 400, Height = 300 };
+            var resolved = RegionMemory.Resolve(saved, 0, 0, 1920, 1080);
+
+            TestRunner.NotNull(resolved, "使える");
+            TestRunner.Near(100, resolved!.Value.X, 0.001, "左");
+            TestRunner.Near(400, resolved.Value.Width, 0.001, "幅");
+            TestRunner.Null(
+                RegionMemory.ExplainMismatch(saved, 0, 0, 1920, 1080), "説明は要らない");
+        });
+
+        t.Case("画面の端にぴったり接していても使える", () =>
+        {
+            var saved = new SavedRegion { X = 0, Y = 0, Width = 1920, Height = 1080 };
+            TestRunner.NotNull(RegionMemory.Resolve(saved, 0, 0, 1920, 1080), "全画面ぴったり");
+        });
+
+        t.Case("はみ出す範囲は切らずに断る", () =>
+        {
+            // 黙って小さく切って返すと「前回と同じ」と言いながら別の絵が出てくる
+            var saved = new SavedRegion { X = 1800, Y = 50, Width = 400, Height = 300 };
+
+            TestRunner.Null(RegionMemory.Resolve(saved, 0, 0, 1920, 1080), "右にはみ出す");
+            TestRunner.NotNull(
+                RegionMemory.ExplainMismatch(saved, 0, 0, 1920, 1080), "理由が付く");
+        });
+
+        t.Case("左のモニタ（負の座標）でも覚えたまま使える", () =>
+        {
+            var saved = new SavedRegion { X = -1700, Y = 100, Width = 800, Height = 600 };
+            var resolved = RegionMemory.Resolve(saved, -1920, 0, 3840, 1080);
+
+            TestRunner.NotNull(resolved, "使える");
+            TestRunner.Near(-1700, resolved!.Value.X, 0.001, "左");
+        });
+
+        t.Case("モニタを外して範囲が画面の外になったら断る", () =>
+        {
+            var saved = new SavedRegion { X = -1700, Y = 100, Width = 800, Height = 600 };
+
+            // 左のモニタを外した後。仮想画面は 0 から始まる
+            TestRunner.Null(RegionMemory.Resolve(saved, 0, 0, 1920, 1080), "もう無い場所");
+        });
+
+        t.Case("まだ覚えていなければ断る", () =>
+        {
+            TestRunner.Null(RegionMemory.Resolve(null, 0, 0, 1920, 1080), "未記録");
+            TestRunner.NotNull(
+                RegionMemory.ExplainMismatch(null, 0, 0, 1920, 1080), "未記録の説明");
+        });
+
+        t.Case("画面が取れていないときは断る", () =>
+        {
+            var saved = new SavedRegion { X = 0, Y = 0, Width = 10, Height = 10 };
+            TestRunner.Null(RegionMemory.Resolve(saved, 0, 0, 0, 0), "画面の寸法が無い");
+        });
+
+        t.Case("設定に覚えさせると読み戻せる", () =>
+        {
+            var settings = new AppSettings();
+            settings.RememberRegion(new PixelRect(30, 40, 500, 400));
+
+            TestRunner.NotNull(settings.LastRegion, "覚えた");
+            TestRunner.Equal(500, settings.LastRegion!.Width, "幅");
+
+            // 成立しない範囲で上書きされない（直前に覚えた範囲を失わない）
+            settings.RememberRegion(new PixelRect(30, 40, 0, 0));
+            TestRunner.Equal(500, settings.LastRegion.Width, "空の範囲では消えない");
+        });
+    }
+
+    // ================================================================ プリセット
+
+    private static void StylePresetTests(TestRunner t)
+    {
+        t.Section("描き方のプリセット");
+
+        t.Case("名前の前後の空白を落とし、太さを使える範囲に収める", () =>
+        {
+            var preset = new StylePreset
+            {
+                Name = "  赤枠  ",
+                Tool = ShapeKind.Rectangle,
+                Thickness = 999,
+                FontSize = 1,
+            }.Sanitized();
+
+            TestRunner.Equal("赤枠", preset.Name, "名前");
+            TestRunner.Near(20, preset.Thickness, 0.001, "太さはスライダーの上限まで");
+            TestRunner.Near(8, preset.FontSize, 0.001, "文字の大きさの下限");
+        });
+
+        t.Case("知らないツールは枠として扱う", () =>
+        {
+            var preset = new StylePreset { Name = "謎", Tool = "NotATool" }.Sanitized();
+            TestRunner.Equal(ShapeKind.Rectangle, preset.Tool, "既定のツール");
+        });
+
+        t.Case("名前が無いものはプリセットとして使えない", () =>
+        {
+            TestRunner.True(
+                !new StylePreset { Name = "   ", Tool = ShapeKind.Arrow }.Sanitized().IsUsable,
+                "空の名前");
+
+            TestRunner.True(
+                new StylePreset { Name = "矢印", Tool = ShapeKind.Arrow }.Sanitized().IsUsable,
+                "名前があれば使える");
+        });
+
+        t.Case("吹き出し以外では吹き出しの指定を持たない", () =>
+        {
+            var preset = new StylePreset
+            {
+                Name = "枠",
+                Tool = ShapeKind.Rectangle,
+                CalloutShape = CalloutShapes.Oval,
+                CalloutStyle = CalloutStyles.Dark,
+            }.Sanitized();
+
+            TestRunner.Null(preset.CalloutShape, "形");
+            TestRunner.Null(preset.CalloutStyle, "地色");
+        });
+
+        t.Case("吹き出しの知らない指定は既定へ寄せる", () =>
+        {
+            var preset = new StylePreset
+            {
+                Name = "吹き出し",
+                Tool = ShapeKind.Callout,
+                CalloutShape = "Hexagon",
+                CalloutStyle = "Neon",
+            }.Sanitized();
+
+            TestRunner.Equal(CalloutShapes.Round, preset.CalloutShape, "形");
+            TestRunner.Equal(CalloutStyles.Solid, preset.CalloutStyle, "地色");
+        });
+
+        t.Case("色が違えば別の描き方", () =>
+        {
+            var red = new StylePreset { Name = "a", Tool = ShapeKind.Rectangle, Color = "#FFE53935" };
+            var blue = new StylePreset { Name = "b", Tool = ShapeKind.Rectangle, Color = "#FF1E88E5" };
+
+            TestRunner.True(!red.SameStyleAs(blue), "色違いは別物");
+            TestRunner.True(red.SameStyleAs(red.Clone()), "写しは同じ");
+        });
+
+        t.Case("効かない項目の違いでは別物にしない", () =>
+        {
+            // 文字ツールに線の太さは効かない。太さ違いで二重登録させない
+            var a = new StylePreset { Name = "a", Tool = ShapeKind.Text, Thickness = 3, FontSize = 24 };
+            var b = new StylePreset { Name = "b", Tool = ShapeKind.Text, Thickness = 9, FontSize = 24 };
+            TestRunner.True(a.SameStyleAs(b), "文字では太さを見ない");
+
+            // 逆に、枠に書体は効かない
+            var c = new StylePreset { Name = "c", Tool = ShapeKind.Rectangle, FontFamily = "Meiryo" };
+            var d = new StylePreset { Name = "d", Tool = ShapeKind.Rectangle, FontFamily = "Arial" };
+            TestRunner.True(c.SameStyleAs(d), "枠では書体を見ない");
+        });
+
+        t.Case("文字では書体と大きさの違いを見る", () =>
+        {
+            var a = new StylePreset { Name = "a", Tool = ShapeKind.Text, FontFamily = "Meiryo", FontSize = 24 };
+            var b = new StylePreset { Name = "b", Tool = ShapeKind.Text, FontFamily = "Meiryo", FontSize = 40 };
+
+            TestRunner.True(!a.SameStyleAs(b), "大きさ違い");
+        });
+
+        t.Case("使えない項目は一覧から落ちる", () =>
+        {
+            var list = StylePreset.SanitizeList(
+            [
+                new StylePreset { Name = "枠", Tool = ShapeKind.Rectangle },
+                null,
+                new StylePreset { Name = "   ", Tool = ShapeKind.Arrow },
+            ]);
+
+            TestRunner.Equal(1, list.Count, "残る件数");
+            TestRunner.Equal("枠", list[0].Name, "残ったもの");
+        });
+
+        t.Case("同じ名前は後から来たほうに番号が付く", () =>
+        {
+            var list = StylePreset.SanitizeList(
+            [
+                new StylePreset { Name = "枠", Tool = ShapeKind.Rectangle },
+                new StylePreset { Name = "枠", Tool = ShapeKind.Ellipse },
+                new StylePreset { Name = "枠", Tool = ShapeKind.Arrow },
+            ]);
+
+            TestRunner.Equal(3, list.Count, "件数");
+            TestRunner.Equal("枠", list[0].Name, "1 つ目");
+            TestRunner.Equal("枠(2)", list[1].Name, "2 つ目");
+            TestRunner.Equal("枠(3)", list[2].Name, "3 つ目");
+        });
+
+        t.Case("上限を超える分は捨てる", () =>
+        {
+            var many = Enumerable.Range(0, StylePreset.MaxCount + 10)
+                .Select(i => new StylePreset { Name = $"p{i}", Tool = ShapeKind.Rectangle });
+
+            TestRunner.Equal(StylePreset.MaxCount, StylePreset.SanitizeList(many).Count, "件数");
+        });
+
+        t.Case("初期セットはそのまま使える", () =>
+        {
+            var defaults = StylePreset.Defaults();
+
+            TestRunner.True(defaults.Count > 0, "空ではない");
+            TestRunner.True(defaults.All(p => p.Sanitized().IsUsable), "全部使える");
+            TestRunner.Equal(
+                defaults.Count,
+                StylePreset.SanitizeList(defaults).Count,
+                "整えても減らない（名前が重複していない）");
+        });
+
+        t.Case("中身の説明に効かない項目を出さない", () =>
+        {
+            var box = new StylePreset { Name = "枠", Tool = ShapeKind.Rectangle, Thickness = 4 }.Sanitized();
+            TestRunner.True(box.Describe().Contains("太さ"), "枠には太さを出す");
+
+            var text = new StylePreset { Name = "文字", Tool = ShapeKind.Text }.Sanitized();
+            TestRunner.True(!text.Describe().Contains("太さ"), "文字に太さは出さない");
+
+            var blur = new StylePreset { Name = "ぼかし", Tool = ShapeKind.Blur }.Sanitized();
+            TestRunner.True(!blur.Describe().Contains("#"), "ぼかしに色は出さない");
+        });
     }
 
     // ================================================================ 中抜きの確定待ち

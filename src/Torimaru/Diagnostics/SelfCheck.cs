@@ -448,7 +448,7 @@ public static class SelfCheck
 
         // 画面そのものを組み立ててみる。XAML の書き間違いや
         // 組み立て中の例外は、ここを通さないと起動して初めて分かる。
-        Check("編集画面を組み立てられる（画像を切るツールと確定待ちの部品が揃う）", () =>
+        Check("編集画面を組み立てられる（切るツール・確定待ち・プリセットが揃う）", () =>
         {
             var editor = new EditorWindow(
                 Path.Combine(outputFolder, "editor-probe.png"),
@@ -468,15 +468,43 @@ public static class SelfCheck
                     && editor.FindName("BandGripB") is System.Windows.Shapes.Rectangle
                     && editor.FindName("BandBar") is System.Windows.Controls.Border;
 
+                // プリセットの行は中身をコードで並べるので、実際に並んだかまで見る。
+                // 一度も作っていない設定を渡しているので、初期セットがそのまま出るはず
+                var strip = editor.FindName("PresetStrip") as System.Windows.Controls.Panel;
+                var expectedPresets = StylePreset.Defaults().Count;
+                var presets = strip is not null
+                    && strip.Children.Count == expectedPresets
+                    && strip.Children.OfType<System.Windows.Controls.Button>().Count() == expectedPresets;
+
                 report.AppendLine(
                     $"       ツール: {found} / {tools.Length} 個 / 範囲表示: {adorner}"
-                    + $" / 確定待ちの部品: {band}");
+                    + $" / 確定待ちの部品: {band}"
+                    + $" / プリセット: {strip?.Children.Count} / {expectedPresets} 個");
 
-                return found == tools.Length && adorner && band;
+                return found == tools.Length && adorner && band && presets;
             }
             finally
             {
                 TryClose(editor);
+            }
+        });
+
+        Check("プリセットの名前を入れる画面を組み立てられる", () =>
+        {
+            var window = new Torimaru.App.Editor.PresetNameWindow(
+                "このプリセットの名前", "枠 / #FFE53935 / 太さ 4", "枠");
+
+            try
+            {
+                var box = window.FindName("NameBox") as System.Windows.Controls.TextBox;
+                report.AppendLine($"       初期値: {box?.Text}");
+
+                // 名前が入っていなければ登録させない作りなので、キャンセル扱いのまま閉じる
+                return box is not null && box.Text == "枠" && window.PresetName is null;
+            }
+            finally
+            {
+                TryClose(window);
             }
         });
 

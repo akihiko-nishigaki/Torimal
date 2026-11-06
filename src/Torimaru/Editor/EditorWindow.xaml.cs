@@ -134,6 +134,7 @@ public partial class EditorWindow : Window
 
         BuildPalette();
         BuildFontControls();
+        RebuildPresetStrip();
         ThicknessSlider.Value = _thickness;
         ThicknessLabel.Text = ((int)_thickness).ToString(CultureInfo.InvariantCulture);
         SelectTool_(SelectTool);
@@ -246,6 +247,332 @@ public partial class EditorWindow : Window
 
             button.Click += OnColorClick;
             Palette.Children.Add(button);
+        }
+    }
+
+    // ---------------------------------------------------------------- プリセット
+
+    /// <summary>
+    /// プリセット一覧。一度も作っていなければ初期セットが入る
+    /// （空リストは「全部消した」なので補充しない）。
+    /// </summary>
+    private List<StylePreset> Presets => _settings.EnsureStylePresets();
+
+    /// <summary>
+    /// いま選んでいる設定をプリセットの形で取り出す。
+    /// 注釈を置くツール以外（選択・トリミング・中抜き）では null。
+    /// </summary>
+    private StylePreset? CurrentStyleAsPreset(string name = "")
+    {
+        if (!ShapeKind.IsKnown(_tool))
+        {
+            return null;
+        }
+
+        return new StylePreset
+        {
+            Name = name,
+            Tool = _tool,
+            Color = _color,
+            Thickness = _thickness,
+            FontFamily = CurrentFontFamily,
+            FontSize = CurrentFontSize,
+            CalloutShape = CurrentCalloutShape,
+            CalloutStyle = CurrentCalloutStyle,
+        }.Sanitized();
+    }
+
+    /// <summary>プリセットの行を組み直す。</summary>
+    private void RebuildPresetStrip()
+    {
+        PresetStrip.Children.Clear();
+
+        var presets = Presets;
+        for (var index = 0; index < presets.Count; index++)
+        {
+            PresetStrip.Children.Add(BuildPresetButton(presets[index], index));
+        }
+
+        AddPresetButton.IsEnabled = presets.Count < StylePreset.MaxCount;
+
+        PresetHint.Text = presets.Count == 0
+            ? "よく使う色や太さを「＋ 今の設定を登録」で残すと、次からは 1 回押すだけで戻せます"
+            : "クリックで呼び出し（Ctrl+1〜9）／右クリックで名前の変更・上書き・削除";
+    }
+
+    private Button BuildPresetButton(StylePreset preset, int index)
+    {
+        // ぼかしは色を使わないので、色の見本を出すと嘘になる
+        var chipColor = preset.Tool == ShapeKind.Blur
+            ? Color.FromRgb(0xBD, 0xBD, 0xBD)
+            : ShapeRenderer.ParseColor(preset.Color);
+
+        var chip = new System.Windows.Shapes.Rectangle
+        {
+            Width = 11,
+            Height = 11,
+            RadiusX = 2,
+            RadiusY = 2,
+            Margin = new Thickness(0, 0, 5, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Stroke = new SolidColorBrush(Color.FromRgb(0x9E, 0x9E, 0x9E)),
+            StrokeThickness = 1,
+            Fill = new SolidColorBrush(chipColor),
+        };
+
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        panel.Children.Add(chip);
+        panel.Children.Add(new TextBlock
+        {
+            Text = preset.Name,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+
+        var shortcut = index < StylePreset.ShortcutCount ? $"（Ctrl+{index + 1}）" : string.Empty;
+
+        var button = new Button
+        {
+            Style = (Style)FindResource("PresetButton"),
+            Content = panel,
+            ToolTip = $"{preset.Describe()}{shortcut}\n右クリックで名前の変更・上書き・削除",
+        };
+
+        button.Click += (_, _) => ApplyPreset(preset);
+        button.ContextMenu = BuildPresetMenu(preset);
+        return button;
+    }
+
+    private ContextMenu BuildPresetMenu(StylePreset preset)
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(NewMenuItem("名前を変更…", () => RenamePreset(preset)));
+        menu.Items.Add(NewMenuItem("今の設定で上書き", () => OverwritePreset(preset)));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(NewMenuItem("左へ移動", () => MovePreset(preset, -1)));
+        menu.Items.Add(NewMenuItem("右へ移動", () => MovePreset(preset, 1)));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(NewMenuItem("削除", () => DeletePreset(preset)));
+        return menu;
+    }
+
+    private static MenuItem NewMenuItem(string header, Action action)
+    {
+        var item = new MenuItem { Header = header };
+        item.Click += (_, _) => action();
+        return item;
+    }
+
+    /// <summary>
+    /// プリセットの内容をツールバーへ反映する。
+    ///
+    /// 先にツールを切り替えるので選択中の図形は外れる。
+    /// つまりプリセットを呼んでも、すでに置いた図形は書き換わらない。
+    /// </summary>
+    private void ApplyPreset(StylePreset preset)
+    {
+        SelectTool_(preset.Tool);
+
+        _color = preset.Color;
+        _thickness = preset.Thickness;
+        ThicknessSlider.Value = _thickness;
+
+        if (preset.IsTextual)
+        {
+            _syncingFont = true;
+            try
+            {
+                // この PC に入っていない書体は選べない。その場合は今の書体のままにする
+                if (preset.FontFamily is { } family)
+                {
+                    SelectByTag(FontFamilyBox, family);
+                }
+
+                var size = (int)Math.Round(preset.FontSize);
+                EnsureFontSizeItem(size);
+                SelectByTag(FontSizeBox, size.ToString(CultureInfo.InvariantCulture));
+            }
+            finally
+            {
+                _syncingFont = false;
+            }
+
+            _fontFamily = CurrentFontFamily;
+            _fontSize = CurrentFontSize;
+            UpdateFavoriteButton();
+        }
+
+        if (preset.Tool == ShapeKind.Callout)
+        {
+            _syncingCalloutLook = true;
+            try
+            {
+                SelectByTag(CalloutShapeBox, CalloutShapes.Normalize(preset.CalloutShape));
+                SelectByTag(CalloutStyleBox, CalloutStyles.Normalize(preset.CalloutStyle));
+            }
+            finally
+            {
+                _syncingCalloutLook = false;
+            }
+        }
+
+        UpdateStatus($"プリセット「{preset.Name}」: {preset.Describe()}");
+    }
+
+    /// <summary>Ctrl+数字 で呼ぶ。その番号が無いときは何もしない。</summary>
+    private void ApplyPresetAt(int index)
+    {
+        var presets = Presets;
+        if (index >= 0 && index < presets.Count)
+        {
+            ApplyPreset(presets[index]);
+        }
+        else
+        {
+            UpdateStatus($"{index + 1} 番のプリセットはありません");
+        }
+    }
+
+    private void OnAddPreset(object sender, RoutedEventArgs e)
+    {
+        if (CurrentStyleAsPreset() is not { } draft)
+        {
+            UpdateStatus(
+                "プリセットにできるのは注釈のツールだけです"
+                + "（選択・トリミング・中抜きは登録できません）");
+            return;
+        }
+
+        // 中身が同じプリセットが並ぶと、どれを押しても同じで区別が付かない
+        if (Presets.FirstOrDefault(existing => existing.SameStyleAs(draft)) is { } same)
+        {
+            UpdateStatus($"同じ内容のプリセット「{same.Name}」がすでにあります");
+            return;
+        }
+
+        var window = new PresetNameWindow(
+            "このプリセットの名前", draft.Describe(), StylePreset.ToolLabel(draft.Tool))
+        {
+            Owner = this,
+        };
+
+        if (window.ShowDialog() != true || window.PresetName is not { } name)
+        {
+            return;
+        }
+
+        draft.Name = UniquePresetName(name);
+        Presets.Add(draft);
+        SavePresets($"プリセット「{draft.Name}」を登録しました: {draft.Describe()}");
+    }
+
+    private void RenamePreset(StylePreset preset)
+    {
+        var window = new PresetNameWindow("新しい名前", preset.Describe(), preset.Name)
+        {
+            Owner = this,
+        };
+
+        if (window.ShowDialog() != true || window.PresetName is not { } name)
+        {
+            return;
+        }
+
+        var before = preset.Name;
+        preset.Name = UniquePresetName(name, preset);
+
+        SavePresets(before == preset.Name
+            ? $"プリセット「{preset.Name}」"
+            : $"プリセットの名前を変えました: {before} → {preset.Name}");
+    }
+
+    private void OverwritePreset(StylePreset preset)
+    {
+        if (CurrentStyleAsPreset(preset.Name) is not { } updated)
+        {
+            UpdateStatus("上書きできるのは注釈のツールを選んでいるときだけです");
+            return;
+        }
+
+        var index = Presets.IndexOf(preset);
+        if (index < 0)
+        {
+            return;
+        }
+
+        Presets[index] = updated;
+        SavePresets($"プリセット「{updated.Name}」を今の設定で上書きしました: {updated.Describe()}");
+    }
+
+    private void MovePreset(StylePreset preset, int delta)
+    {
+        var index = Presets.IndexOf(preset);
+        var target = index + delta;
+
+        if (index < 0 || target < 0 || target >= Presets.Count)
+        {
+            return;
+        }
+
+        Presets.RemoveAt(index);
+        Presets.Insert(target, preset);
+
+        // 並び順はそのままキーの番号になる
+        var key = target < StylePreset.ShortcutCount ? $"（Ctrl+{target + 1} で呼べます）" : string.Empty;
+        SavePresets($"プリセット「{preset.Name}」を {target + 1} 番目にしました{key}");
+    }
+
+    private void DeletePreset(StylePreset preset)
+    {
+        var answer = MessageBox.Show(
+            $"プリセット「{preset.Name}」を削除しますか？\n\n{preset.Describe()}",
+            "プリセットの削除",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Question);
+
+        if (answer != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        Presets.Remove(preset);
+        SavePresets($"プリセット「{preset.Name}」を削除しました");
+    }
+
+    /// <summary>同じ名前が並ばないように末尾へ番号を足す。</summary>
+    private string UniquePresetName(string name, StylePreset? allow = null)
+    {
+        var taken = Presets
+            .Where(existing => !ReferenceEquals(existing, allow))
+            .Select(existing => existing.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (!taken.Contains(name))
+        {
+            return name;
+        }
+
+        for (var suffix = 2; suffix < 100; suffix++)
+        {
+            var candidate = $"{name}({suffix})";
+            if (!taken.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return name;
+    }
+
+    /// <summary>一覧を整えて設定に書き、行を組み直す。</summary>
+    private void SavePresets(string? status)
+    {
+        _settings.StylePresets = StylePreset.SanitizeList(Presets);
+        SaveSettingsQuietly();
+        RebuildPresetStrip();
+
+        if (status is not null)
+        {
+            UpdateStatus(status);
         }
     }
 
@@ -1852,6 +2179,16 @@ public partial class EditorWindow : Window
                     return;
                 case Key.S:
                     Save();
+                    e.Handled = true;
+                    return;
+
+                // Ctrl+1〜9 でプリセットを呼ぶ（テンキーからも同じ）
+                case >= Key.D1 and <= Key.D9:
+                    ApplyPresetAt(e.Key - Key.D1);
+                    e.Handled = true;
+                    return;
+                case >= Key.NumPad1 and <= Key.NumPad9:
+                    ApplyPresetAt(e.Key - Key.NumPad1);
                     e.Handled = true;
                     return;
             }
