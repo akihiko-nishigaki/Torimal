@@ -58,7 +58,7 @@ C# / .NET 8 / WPF 製。
 
 | 呼び方 | 場所 |
 |--------|------|
-| ホットキー | `Shift + PrintScreen`（既定。変更可） |
+| ホットキー | `Ctrl + Shift + Q`（既定。変更可） |
 | トレイメニュー | 「前回と同じ範囲でキャプチャ」（覚えている大きさが横に出る） |
 | 範囲選択中 | `R` キー |
 
@@ -149,7 +149,7 @@ dotnet build Torimaru.sln -c Release
 | キー | 動作 |
 |------|------|
 | `PrintScreen` | 範囲・ウィンドウキャプチャ |
-| `Shift + PrintScreen` | 前回と同じ範囲でキャプチャ |
+| `Ctrl + Shift + Q` | 前回と同じ範囲でキャプチャ |
 | `Ctrl + PrintScreen` | 全画面キャプチャ |
 | `Ctrl + Shift + L` | スクロールキャプチャ |
 | `Ctrl + Shift + D` | 遅延キャプチャ |
