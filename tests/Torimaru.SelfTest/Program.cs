@@ -899,6 +899,25 @@ internal static class Program
                 var loaded = AppSettings.Load(Path.Combine(temp, "missing.json"));
                 TestRunner.Equal(AppSettings.DefaultSaveFolder(), loaded.SaveFolder, "既定の保存先");
                 TestRunner.True(loaded.CopyToClipboardOnCapture, "既定でクリップボードにコピー");
+                TestRunner.Equal(AfterCaptureModes.Workspace, loaded.AfterCapture, "既定はワークスペースを出す");
+                TestRunner.Equal(3, loaded.WorkspaceAutoHideSeconds, "3 秒で消える");
+            });
+
+            t.Case("撮影後の動作は知らない値なら既定へ戻る", () =>
+            {
+                var file = Path.Combine(temp, "aftercapture.json");
+                File.WriteAllText(
+                    file,
+                    """{ "AfterCapture": "Nope", "WorkspaceAutoHideSeconds": 999, "OpenEditorAfterCapture": true }""");
+
+                var loaded = AppSettings.Load(file);
+                TestRunner.Equal(AfterCaptureModes.Workspace, loaded.AfterCapture, "知らない値は既定");
+                TestRunner.Equal(60, loaded.WorkspaceAutoHideSeconds, "秒数の上限");
+
+                var editor = new AppSettings { AfterCapture = AfterCaptureModes.Editor, WorkspaceAutoHideSeconds = -1 }
+                    .Sanitized();
+                TestRunner.Equal(AfterCaptureModes.Editor, editor.AfterCapture, "正しい値はそのまま");
+                TestRunner.Equal(0, editor.WorkspaceAutoHideSeconds, "負の秒数は 0（消さない）");
             });
 
             t.Case("壊れた設定ファイルでも落ちずに既定値を返す", () =>

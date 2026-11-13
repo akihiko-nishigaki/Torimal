@@ -553,11 +553,15 @@ public sealed class CaptureWorkflow
             return false;
         }
 
+        // 自動で消える途中のものは、撮り終えたら改めて出すので元に戻さない。
+        // 戻すと消えないまま居座ってしまう
+        var restore = !_workspace.IsAutoHiding;
+        _workspace.CancelAutoHide();
         _workspace.Hide();
 
         // 画面から消えるのを待つ（待たないと自分の窓が写る）
         await Task.Delay(90);
-        return true;
+        return restore;
     }
 
     private void Finish(BitmapSource image, string? note = null)
@@ -575,15 +579,22 @@ public sealed class CaptureWorkflow
             CaptureSaver.TryCopyToClipboard(image);
         }
 
-        _workspace?.Refresh();
+        switch (_settings.AfterCapture)
+        {
+            case AfterCaptureModes.Editor:
+                _workspace?.Refresh();
+                OpenEditor(path);
+                break;
 
-        if (_settings.OpenEditorAfterCapture)
-        {
-            OpenEditor(path);
-        }
-        else
-        {
-            Notify?.Invoke($"保存しました: {Path.GetFileName(path)}");
+            case AfterCaptureModes.Workspace:
+                // コピー済みなのでそのまま貼れる。編集・ドラッグしたいときだけ触ればよい
+                EnsureWorkspace().ShowBriefly(TimeSpan.FromSeconds(_settings.WorkspaceAutoHideSeconds));
+                break;
+
+            default:
+                _workspace?.Refresh();
+                Notify?.Invoke($"保存しました: {Path.GetFileName(path)}");
+                break;
         }
     }
 
@@ -621,21 +632,18 @@ public sealed class CaptureWorkflow
         }
     }
 
-    public void ShowWorkspace()
+    /// <summary>手で開く。この場合は自動で消さない。</summary>
+    public void ShowWorkspace() => EnsureWorkspace().ShowPinned();
+
+    private WorkspaceWindow EnsureWorkspace()
     {
         if (_workspace is null)
         {
             _workspace = new WorkspaceWindow(this);
             _workspace.Closed += (_, _) => _workspace = null;
-            _workspace.Show();
-        }
-        else
-        {
-            _workspace.Show();
-            _workspace.Activate();
         }
 
-        _workspace.Refresh();
+        return _workspace;
     }
 
     public void OpenSaveFolder()

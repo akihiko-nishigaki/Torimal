@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Torimaru.App.Services;
 using Torimaru.Core;
 
@@ -22,6 +23,7 @@ public partial class WorkspaceWindow : Window
     private const int MaxItems = 80;
 
     private readonly CaptureWorkflow _workflow;
+    private readonly DispatcherTimer _autoHideTimer = new();
     private Point _dragOrigin;
     private bool _dragArmed;
 
@@ -30,10 +32,92 @@ public partial class WorkspaceWindow : Window
         _workflow = workflow;
         InitializeComponent();
         UpdateButtons();
+
+        _autoHideTimer.Tick += OnAutoHideTick;
+
+        // クリックやドラッグを始めたら使っている最中なので、もう勝手に消さない
+        Activated += (_, _) => CancelAutoHide();
+
+        // マウスを乗せている間は待ち、離れたら数え直す
+        MouseLeave += (_, _) =>
+        {
+            if (IsAutoHiding)
+            {
+                _autoHideTimer.Stop();
+                _autoHideTimer.Start();
+            }
+        };
     }
 
-    /// <summary>一覧を読み直す。サムネイル生成は UI を止めないよう別スレッドで行う。</summary>
-    public void Refresh()
+    /// <summary>撮影直後に出した状態で、時間が来たら消える途中か。</summary>
+    public bool IsAutoHiding { get; private set; }
+
+    /// <summary>手で開く。前面に出して、自動では消さない。</summary>
+    public void ShowPinned()
+    {
+        CancelAutoHide();
+        ShowActivated = true;
+        Show();
+        Activate();
+        Refresh();
+    }
+
+    /// <summary>
+    /// 撮影直後に、手元の作業を邪魔しないよう前面に出すだけ（フォーカスは奪わない）。
+    /// 指定時間が経つと消える。手で開いて使っている最中なら一覧の更新だけにとどめる。
+    /// </summary>
+    public void ShowBriefly(TimeSpan duration)
+    {
+        if (IsVisible && !IsAutoHiding)
+        {
+            Refresh(selectNewest: true);
+            return;
+        }
+
+        ShowActivated = false;
+        Show();
+        Refresh(selectNewest: true);
+
+        _autoHideTimer.Stop();
+        IsAutoHiding = duration > TimeSpan.Zero;
+
+        if (IsAutoHiding)
+        {
+            _autoHideTimer.Interval = duration;
+            _autoHideTimer.Start();
+        }
+    }
+
+    public void CancelAutoHide()
+    {
+        IsAutoHiding = false;
+        _autoHideTimer.Stop();
+    }
+
+    private void OnAutoHideTick(object? sender, EventArgs e)
+    {
+        // 乗せている間は消さない。離れたら MouseLeave で数え直す
+        if (IsMouseOver)
+        {
+            _autoHideTimer.Stop();
+            return;
+        }
+
+        CancelAutoHide();
+        Hide();
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        CancelAutoHide();
+        base.OnClosed(e);
+    }
+
+    /// <summary>
+    /// 一覧を読み直す。サムネイル生成は UI を止めないよう別スレッドで行う。
+    /// selectNewest なら先頭（＝今撮ったもの）を選んでおき、すぐ編集・コピーできるようにする。
+    /// </summary>
+    public void Refresh(bool selectNewest = false)
     {
         var folder = _workflow.Settings.SaveFolder;
 
@@ -49,6 +133,13 @@ public partial class WorkspaceWindow : Window
                 var items = task.Result;
                 Items.ItemsSource = items;
                 EmptyHint.Visibility = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+                if (selectNewest && items.Count > 0)
+                {
+                    Items.SelectedIndex = 0;
+                    Items.ScrollIntoView(items[0]);
+                }
+
                 UpdateButtons();
             },
             CancellationToken.None,

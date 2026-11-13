@@ -17,8 +17,14 @@ public sealed class AppSettings
     /// <summary>キャプチャ直後にクリップボードへコピーするか。</summary>
     public bool CopyToClipboardOnCapture { get; set; } = true;
 
-    /// <summary>キャプチャ直後にエディタを開くか。</summary>
-    public bool OpenEditorAfterCapture { get; set; } = true;
+    /// <summary>
+    /// キャプチャ直後に何を出すか（<see cref="AfterCaptureModes"/>）。
+    /// 既定はワークスペースを少しだけ出す。コピー済みなのですぐ貼れ、編集したければそこから開ける。
+    /// </summary>
+    public string AfterCapture { get; set; } = AfterCaptureModes.Workspace;
+
+    /// <summary>撮影後に出したワークスペースが自動で消えるまでの秒数。0 は消さない。</summary>
+    public int WorkspaceAutoHideSeconds { get; set; } = 3;
 
     /// <summary>
     /// 最後に撮った範囲（仮想画面の物理ピクセル）。null は未記録。
@@ -226,6 +232,12 @@ public sealed class AppSettings
             LastRegion = null;
         }
 
+        if (!AfterCaptureModes.IsKnown(AfterCapture))
+        {
+            AfterCapture = AfterCaptureModes.Workspace;
+        }
+
+        WorkspaceAutoHideSeconds = Math.Clamp(WorkspaceAutoHideSeconds, 0, 60);
         MagnifierZoom = Math.Clamp(MagnifierZoom, 2, 20);
         DelaySeconds = Math.Clamp(DelaySeconds, 1, 60);
         ScrollNotches = Math.Clamp(ScrollNotches, 1, 10);
@@ -254,4 +266,20 @@ public sealed class AppSettings
 
         return this;
     }
+}
+
+/// <summary><see cref="AppSettings.AfterCapture"/> に書ける値。</summary>
+public static class AfterCaptureModes
+{
+    /// <summary>ワークスペースを出す（自動で消える）。</summary>
+    public const string Workspace = "Workspace";
+
+    /// <summary>編集画面を開く。</summary>
+    public const string Editor = "Editor";
+
+    /// <summary>何も出さず、通知だけする。</summary>
+    public const string None = "None";
+
+    public static bool IsKnown(string? mode)
+        => mode is Workspace or Editor or None;
 }
