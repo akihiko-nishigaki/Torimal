@@ -227,6 +227,7 @@
           <ComboBoxItem Tag="Round" Content="角丸" />
           <ComboBoxItem Tag="Rect" Content="四角" />
           <ComboBoxItem Tag="Oval" Content="楕円" />
+          <ComboBoxItem Tag="Frame" Content="四角枠" ToolTip="しっぽの無い四角い枠に文字を入れる" />
         </ComboBox>
         <ComboBox x:Name="CalloutStyleBox"
                   Width="88" Height="26"

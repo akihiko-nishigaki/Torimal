@@ -976,6 +976,20 @@ public static class SelfCheck
             return roundDiff == 0 && ovalDiff > 50;
         });
 
+        Check("四角枠はしっぽを描かない（先端をどこに置いても絵が同じ）", () =>
+        {
+            // 先端を本体の外（下）と内側に置いて比べる。しっぽが出ていれば差が出る
+            var outside = DrawOnly(Looked(CalloutShapes.Frame, CalloutStyles.Outline, 100, 190));
+            var inside = DrawOnly(Looked(CalloutShapes.Frame, CalloutStyles.Outline, 130, 82));
+            var withTail = DrawOnly(Looked(CalloutShapes.Rect, CalloutStyles.Outline, 100, 190));
+
+            var frameDiff = CountDifferingPixels(outside, inside);
+            var rectDiff = CountDifferingPixels(outside, withTail);
+
+            report.AppendLine($"       四角枠の差分: {frameDiff} px / 四角(しっぽあり)との差分: {rectDiff} px");
+            return frameDiff == 0 && rectDiff > 50;
+        });
+
         Check("楕円・白地でも大きさが未確定（入力中）で落ちない", () =>
         {
             foreach (var bodyShape in CalloutShapes.All)

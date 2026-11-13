@@ -5,6 +5,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using Torimaru.App.Interop;
 using Torimaru.App.Services;
 using Torimaru.Core;
 
@@ -209,7 +210,11 @@ public partial class EditorWindow : Window
         {
             Canvas.SetLeft(TailHandle, (_selected.TailX * DisplayScale) - (TailHandle.Width / 2));
             Canvas.SetTop(TailHandle, (_selected.TailY * DisplayScale) - (TailHandle.Height / 2));
-            TailHandle.Visibility = Visibility.Visible;
+
+            // 四角枠にはしっぽが無いので、動かせるつまみも出さない
+            TailHandle.Visibility = CalloutShapes.HasTail(_selected.CalloutShape)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
             SyncCalloutLookControls(_selected);
         }
         else
@@ -1084,7 +1089,9 @@ public partial class EditorWindow : Window
             }
 
             // 選択中の吹き出しのつまみが近ければ、本体ではなく先端を動かす
-            if (_selected is { Kind: ShapeKind.Callout } && IsNearTail(_selected, point))
+            if (_selected is { Kind: ShapeKind.Callout } callout
+                && CalloutShapes.HasTail(callout.CalloutShape)
+                && IsNearTail(callout, point))
             {
                 BeginAction();
                 _draggingTail = true;
@@ -1626,7 +1633,7 @@ public partial class EditorWindow : Window
 
         UpdateStatus(
             (kind == ShapeKind.Callout ? "吹き出しの文字を入力" : "文字を入力")
-            + "（Enter で改行 / Ctrl+Enter または他をクリックで確定 / Esc で取り消し）");
+            + "（Enter で改行 / Ctrl+Enter または他をクリックで確定 / Esc で確定して選択ツールへ）");
         Render();
     }
 
@@ -1716,7 +1723,19 @@ public partial class EditorWindow : Window
         if (e.Key == Key.Escape)
         {
             e.Handled = true;
-            CancelInlineText();
+
+            if (_reediting)
+            {
+                // 書き直しの Esc は元の文字に戻す（既に選択ツールにいる）
+                CancelInlineText();
+            }
+            else
+            {
+                // 新しく置いた文字・吹き出しは Esc で確定して選択ツールへ戻す
+                //（SelectTool_ の先頭で入力中の文字を確定する）
+                SelectTool_(SelectTool);
+                UpdateSelectionAdorner();
+            }
         }
     }
 
@@ -1770,7 +1789,9 @@ public partial class EditorWindow : Window
 
                 UpdateStatus(reediting
                     ? "吹き出しの文字を書き直しました"
-                    : "吹き出しを置きました。選択ツール (V) で○をドラッグすると先端が動きます");
+                    : CalloutShapes.HasTail(shape.CalloutShape)
+                        ? "吹き出しを置きました。選択ツール (V) で○をドラッグすると先端が動きます"
+                        : "四角枠を置きました");
             }
             else
             {
@@ -2229,6 +2250,17 @@ public partial class EditorWindow : Window
             }
         }
 
+        // 画像の上にマウスがあるときは、矢印キーでカーソルを 1px（Shift で 10px）動かす。
+        // ドラッグ中でも効くので、図形の端をピクセル単位で合わせられる。
+        // 書体の一覧などにフォーカスがあるときは、その中の移動に使わせる
+        if (CanvasHost.IsMouseOver
+            && Keyboard.FocusedElement is not (ComboBox or ComboBoxItem or TextBox)
+            && CursorNudge.TryMove(e.Key))
+        {
+            e.Handled = true;
+            return;
+        }
+
         switch (e.Key)
         {
             case Key.Delete or Key.Back:
@@ -2245,10 +2277,29 @@ public partial class EditorWindow : Window
                     CancelRegionDrag();
                     UpdateStatus("中止しました");
                 }
+                else if (_draft is not null)
+                {
+                    // 描いている途中なら、その図形は置かずに選択ツールへ戻す
+                    _document.Shapes.Remove(_draft);
+                    _draft = null;
+                    AbortAction();
+                    CanvasHost.ReleaseMouseCapture();
+                    SelectTool_(SelectTool);
+                    Render();
+                    UpdateStatus("描きかけの図形を取り消して、選択ツールに戻しました");
+                }
                 else if (IsImageTool(_tool))
                 {
                     // 画像を切るツールのままだと次のドラッグでまた切ってしまう
                     SelectTool_(SelectTool);
+                    UpdateStatus("選択ツールに戻しました");
+                }
+                else if (_tool != SelectTool)
+                {
+                    // 描き終えたら Esc で選択ツールへ。今描いた図形は選んだままにするので、
+                    // そのまま動かしたり色を変えたりできる
+                    SelectTool_(SelectTool);
+                    UpdateSelectionAdorner();
                     UpdateStatus("選択ツールに戻しました");
                 }
                 else

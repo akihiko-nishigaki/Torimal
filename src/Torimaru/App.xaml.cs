@@ -208,6 +208,7 @@ public partial class App : Application
         AddMenuItem(menu, "動画ツール（トリム・結合）", null, () => _workflow?.OpenVideoTools());
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         AddMenuItem(menu, "ワークスペースを表示", HotKeyActions.ShowWorkspace.DisplayName, () => _workflow?.ShowWorkspace());
+        menu.Items.Add(BuildAutoHideMenu());
         AddMenuItem(menu, "保存フォルダを開く", null, () => _workflow?.OpenSaveFolder());
         menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         AddMenuItem(menu, "ショートカットキーの設定…", null, ShowHotKeySettings);
@@ -251,6 +252,62 @@ public partial class App : Application
 
         menu.Items.Add(item);
         return item;
+    }
+
+    /// <summary>撮影後に出すワークスペースが消えるまでの秒数の候補。0 は消さない。</summary>
+    private static readonly int[] AutoHideChoices = [2, 3, 5, 10, 0];
+
+    /// <summary>
+    /// 撮影後のワークスペースが消えるまでの秒数を選ぶサブメニュー。
+    /// 選んだ値はすぐ効き、settings.json にも残る。
+    /// </summary>
+    private System.Windows.Forms.ToolStripMenuItem BuildAutoHideMenu()
+    {
+        var parent = new System.Windows.Forms.ToolStripMenuItem("撮影後のワークスペース");
+
+        // 設定ファイルで候補に無い秒数を書いた場合も今の値が分かるよう、開くたびに組み直す
+        parent.DropDownOpening += (_, _) => FillAutoHideMenu(parent);
+        FillAutoHideMenu(parent);
+        return parent;
+    }
+
+    private void FillAutoHideMenu(System.Windows.Forms.ToolStripMenuItem parent)
+    {
+        parent.DropDownItems.Clear();
+
+        var current = _settings.WorkspaceAutoHideSeconds;
+        var choices = AutoHideChoices.Contains(current)
+            ? AutoHideChoices
+            : AutoHideChoices.Append(current).OrderBy(s => s == 0 ? int.MaxValue : s).ToArray();
+
+        foreach (var seconds in choices)
+        {
+            var item = new System.Windows.Forms.ToolStripMenuItem(
+                seconds == 0 ? "自動で消さない" : $"{seconds} 秒で消す")
+            {
+                Checked = seconds == current,
+            };
+
+            item.Click += (_, _) => SetAutoHideSeconds(seconds);
+            parent.DropDownItems.Add(item);
+        }
+
+        // 撮影後に編集画面を開く設定などでは、この秒数は使われない
+        if (_settings.AfterCapture != AfterCaptureModes.Workspace)
+        {
+            parent.DropDownItems.Add(new System.Windows.Forms.ToolStripSeparator());
+            parent.DropDownItems.Add(new System.Windows.Forms.ToolStripMenuItem(
+                "（撮影後にワークスペースを出さない設定のため効きません）") { Enabled = false });
+        }
+    }
+
+    private void SetAutoHideSeconds(int seconds)
+    {
+        _settings.WorkspaceAutoHideSeconds = seconds;
+        TrySaveSettings();
+        ShowBalloon(seconds == 0
+            ? "撮影後のワークスペースを自動で消さないようにしました"
+            : $"撮影後のワークスペースを {seconds} 秒で消すようにしました");
     }
 
     /// <summary>覚えている範囲の大きさをメニューに出す。</summary>

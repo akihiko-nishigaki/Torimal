@@ -582,6 +582,29 @@ internal static class Program
             TestRunner.Equal(CalloutShapes.Round, CalloutShapes.Normalize("Nope"), "未知の値");
             TestRunner.Equal(CalloutShapes.Oval, CalloutShapes.Normalize(CalloutShapes.Oval), "楕円");
             TestRunner.Equal(CalloutShapes.Rect, CalloutShapes.Normalize(CalloutShapes.Rect), "四角");
+            TestRunner.Equal(CalloutShapes.Frame, CalloutShapes.Normalize(CalloutShapes.Frame), "四角枠");
+        });
+
+        t.Case("しっぽを出さないのは四角枠だけ", () =>
+        {
+            TestRunner.True(!CalloutShapes.HasTail(CalloutShapes.Frame), "四角枠");
+            TestRunner.True(CalloutShapes.HasTail(CalloutShapes.Rect), "四角");
+            TestRunner.True(CalloutShapes.HasTail(CalloutShapes.Oval), "楕円");
+            TestRunner.True(CalloutShapes.HasTail(null), "未設定（旧ファイル）は角丸＝しっぽあり");
+        });
+
+        t.Case("四角枠のプリセットは説明に四角枠と出る", () =>
+        {
+            var preset = new StylePreset
+            {
+                Name = "枠付き文字",
+                Tool = ShapeKind.Callout,
+                CalloutShape = CalloutShapes.Frame,
+                CalloutStyle = CalloutStyles.Outline,
+            }.Sanitized();
+
+            TestRunner.Equal(CalloutShapes.Frame, preset.CalloutShape, "補正で消えない");
+            TestRunner.True(preset.Describe().Contains("四角枠"), "説明");
         });
 
         t.Case("吹き出しの地色は未設定・未知なら色で塗りになる", () =>

@@ -179,6 +179,7 @@ public sealed class StylePreset
             {
                 CalloutShapes.Rect => "四角",
                 CalloutShapes.Oval => "楕円",
+                CalloutShapes.Frame => "四角枠",
                 _ => "角丸",
             });
 

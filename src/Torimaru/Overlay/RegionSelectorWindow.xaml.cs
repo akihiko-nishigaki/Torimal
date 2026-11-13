@@ -76,9 +76,12 @@ public partial class RegionSelectorWindow : Window
             ? $"　R=前回と同じ範囲 ({last.Width:0}x{last.Height:0})"
             : string.Empty;
 
+        // ドラッグ中も効く（ボタンを押したまま矢印で端を合わせられる）
+        recallHint += "　矢印=1px 移動（Shift で 10px）";
+
         HintText.Text = purpose switch
         {
-            SelectionPurpose.Color => "クリック=その色を採取（クリップボードへコピー）　Esc=中止",
+            SelectionPurpose.Color => "クリック／Enter=その色を採取（クリップボードへコピー）　矢印=1px 移動（Shift で 10px）　Esc=中止",
             SelectionPurpose.ScrollTarget =>
                 "スクロールさせたい範囲をドラッグ　クリック=ウィンドウ全体" + recallHint + "　Esc=中止",
             SelectionPurpose.RecordTarget =>
@@ -440,8 +443,27 @@ public partial class RegionSelectorWindow : Window
 
     private void OnKeyDown(object sender, KeyEventArgs e)
     {
+        // 矢印キーでカーソルを 1 ピクセルずつ（Shift で 10 ピクセル）動かす。
+        // 実際のマウスカーソルを動かすので、ドラッグ中ならそのまま範囲の端が動く
+        if (TryNudgeCursor(e.Key))
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (_purpose == SelectionPurpose.Color)
         {
+            if (e.Key == Key.Enter)
+            {
+                // キーボードで位置を合わせたあと、クリックせずに決められるようにする
+                var point = CurrentImagePoint();
+                PickedColor = _image.ColorAt((int)Math.Floor(point.X), (int)Math.Floor(point.Y));
+                DialogResult = true;
+                Close();
+                e.Handled = true;
+                return;
+            }
+
             if (e.Key == Key.Escape)
             {
                 Cancel();
@@ -476,6 +498,14 @@ public partial class RegionSelectorWindow : Window
                 break;
         }
     }
+
+    /// <summary>
+    /// 矢印キーならカーソルを動かして true を返す。
+    /// オーバーレイは仮想画面を等倍で覆っているので、画面の 1 ピクセル＝画像の 1 ピクセル。
+    /// 撮った画面の外へは出さない（出ると十字線もルーペも消える）。
+    /// </summary>
+    private bool TryNudgeCursor(Key key)
+        => CursorNudge.TryMove(key, (_image.OriginX, _image.OriginY, _image.Width, _image.Height));
 
     private void Commit(PixelRect region)
     {

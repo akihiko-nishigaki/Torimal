@@ -10,11 +10,20 @@ public static class CalloutShapes
     public const string Rect = "Rect";
     public const string Oval = "Oval";
 
-    public static readonly string[] All = [Round, Rect, Oval];
+    /// <summary>四角い枠の中に文字を入れるだけ（しっぽを出さない）。</summary>
+    public const string Frame = "Frame";
+
+    public static readonly string[] All = [Round, Rect, Oval, Frame];
 
     /// <summary>未設定・未知の値を既定（角丸）へ寄せる。</summary>
     public static string Normalize(string? value)
         => value is not null && Array.IndexOf(All, value) >= 0 ? value : Round;
+
+    /// <summary>
+    /// しっぽを出す形か。四角枠は出さない
+    /// （先端の座標は持ち続けるので、形を戻せば元の向きのしっぽが戻る）。
+    /// </summary>
+    public static bool HasTail(string? value) => Normalize(value) != Frame;
 }
 
 /// <summary>

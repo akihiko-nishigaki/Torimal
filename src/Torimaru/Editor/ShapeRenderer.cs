@@ -413,7 +413,9 @@ public static class ShapeRenderer
             (shape.TailX - bounds.X) * scale,
             (shape.TailY - bounds.Y) * scale);
 
-        var tail = BuildTail(geometry, body, width, height, tip, scale);
+        var tail = CalloutShapes.HasTail(body)
+            ? BuildTail(geometry, body, width, height, tip, scale)
+            : null;
         if (tail is not null)
         {
             geometry = Geometry.Combine(geometry, tail, GeometryCombineMode.Union, null);
@@ -464,7 +466,7 @@ public static class ShapeRenderer
                 new Point(width / 2, height / 2), width / 2, height / 2);
         }
 
-        var radius = body == CalloutShapes.Rect
+        var radius = body is CalloutShapes.Rect or CalloutShapes.Frame
             ? 0
             : Math.Min(Math.Min(width, height) / 3, 12 * scale);
 
