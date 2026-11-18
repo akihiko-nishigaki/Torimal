@@ -278,7 +278,7 @@ public partial class WorkspaceWindow : Window
         }
         else
         {
-            _workflow.OpenEditor(item.Path);
+            _workflow.OpenEditorFromWorkspace(item.Path);
         }
     }
 

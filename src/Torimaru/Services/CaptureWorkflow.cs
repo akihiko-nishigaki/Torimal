@@ -25,6 +25,9 @@ public sealed class CaptureWorkflow
     private RecordingBarWindow? _recordingBar;
     private bool _capturing;
 
+    // ワークスペースから編集へ移ったので隠している。編集画面が全部閉じたら出し直す
+    private bool _workspaceHiddenForEditor;
+
     public CaptureWorkflow(AppSettings settings) => _settings = settings;
 
     /// <summary>キャプチャ完了をユーザーへ知らせる（トレイのバルーン等）。</summary>
@@ -620,7 +623,16 @@ public sealed class CaptureWorkflow
             editor.Closed += (_, _) =>
             {
                 _editors.Remove(editor);
-                _workspace?.Refresh();
+
+                if (_workspaceHiddenForEditor && _editors.Count == 0)
+                {
+                    _workspaceHiddenForEditor = false;
+                    EnsureWorkspace().ShowPinned();
+                }
+                else
+                {
+                    _workspace?.Refresh();
+                }
             };
 
             editor.Show();
@@ -630,6 +642,25 @@ public sealed class CaptureWorkflow
         {
             Fail($"編集画面を開けませんでした: {Path.GetFileName(path)}", ex);
         }
+    }
+
+    /// <summary>
+    /// ワークスペースから編集画面へ移る。窓の切り替えを減らすためワークスペースは隠し、
+    /// 編集画面を全部閉じたら出し直す。
+    /// </summary>
+    public void OpenEditorFromWorkspace(string path)
+    {
+        OpenEditor(path);
+
+        // 開けなかったときは隠さない
+        if (_editors.Count == 0 || _workspace is not { IsVisible: true })
+        {
+            return;
+        }
+
+        _workspace.CancelAutoHide();
+        _workspace.Hide();
+        _workspaceHiddenForEditor = true;
     }
 
     /// <summary>手で開く。この場合は自動で消さない。</summary>
