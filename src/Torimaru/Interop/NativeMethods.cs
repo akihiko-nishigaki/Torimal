@@ -23,6 +23,8 @@ internal static class NativeMethods
     public const uint MOD_NOREPEAT = 0x4000;
 
     public const uint VK_SNAPSHOT = 0x2C;
+    public const int VK_LWIN = 0x5B;
+    public const int VK_RWIN = 0x5C;
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -221,6 +223,8 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern short GetAsyncKeyState(int vKey);
+
+    public static bool IsKeyDown(int virtualKey) => (GetAsyncKeyState(virtualKey) & 0x8000) != 0;
 
     public const int VK_ESCAPE = 0x1B;
 

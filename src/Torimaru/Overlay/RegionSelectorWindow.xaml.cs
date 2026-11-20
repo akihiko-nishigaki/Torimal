@@ -367,11 +367,25 @@ public partial class RegionSelectorWindow : Window
             x = ToDip(imagePoint.X) - gap - size.Width;
         }
 
-        var y = ToDip(imagePoint.Y) + gap + ToDip(verticalOffset);
-        if (!preferBelow || y + size.Height > canvasHeight)
+        var below = ToDip(imagePoint.Y) + gap + ToDip(verticalOffset);
+        var above = ToDip(imagePoint.Y) - gap - size.Height - ToDip(verticalOffset);
+        var preferred = preferBelow ? below : above;
+        var alternate = preferBelow ? above : below;
+        var y = preferred;
+
+        // 優先側に置けなければ、カーソルの近くで反対側へ回す。
+        // 画面上端で上側に置けないとき、最下端まで飛んで見失うのを防ぐ。
+        if (preferred >= 0 && preferred + size.Height <= canvasHeight)
         {
-            var above = ToDip(imagePoint.Y) - gap - size.Height - ToDip(verticalOffset);
-            y = above >= 0 ? above : Math.Max(0, canvasHeight - size.Height);
+            y = preferred;
+        }
+        else if (alternate >= 0 && alternate + size.Height <= canvasHeight)
+        {
+            y = alternate;
+        }
+        else
+        {
+            y = Math.Clamp(preferred, 0, Math.Max(0, canvasHeight - size.Height));
         }
 
         Canvas.SetLeft(element, Math.Max(0, Math.Min(x, Math.Max(0, canvasWidth - size.Width))));

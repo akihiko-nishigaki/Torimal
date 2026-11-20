@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using Torimaru.App.Interop;
 using Torimaru.Core;
 
 namespace Torimaru.App.Settings;
@@ -285,7 +286,11 @@ public partial class HotKeySettingsWindow : Window
             modifiers |= HotKeyModifiers.Alt;
         }
 
-        if ((pressed & ModifierKeys.Windows) != 0)
+        // Windows キーは OS が先に処理し、WPF の Modifier 状態に反映されないことがある。
+        // PrintScreen のように KeyUp で記録する場合も取りこぼさないよう、Win32 の状態も見る。
+        if ((pressed & ModifierKeys.Windows) != 0
+            || NativeMethods.IsKeyDown(NativeMethods.VK_LWIN)
+            || NativeMethods.IsKeyDown(NativeMethods.VK_RWIN))
         {
             modifiers |= HotKeyModifiers.Win;
         }

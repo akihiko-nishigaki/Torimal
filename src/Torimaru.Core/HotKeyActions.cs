@@ -54,7 +54,7 @@ public static class HotKeyActions
     public static readonly HotKeyAction ShowWorkspace = new(
         "ShowWorkspace",
         "ワークスペース",
-        ["Ctrl+Shift+W"]);
+        ["Win+PrintScreen", "Ctrl+Shift+W"]);
 
     /// <summary>設定画面に出す順番。</summary>
     public static readonly HotKeyAction[] All =
