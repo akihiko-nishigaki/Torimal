@@ -1,6 +1,7 @@
 using System.Text;
 using Torimaru.App.Capture;
 using Torimaru.App.Editor;
+using Torimaru.App.Interop;
 using Torimaru.App.Services;
 using Torimaru.Core;
 
@@ -525,6 +526,18 @@ public static class SelfCheck
             {
                 TryClose(window);
             }
+        });
+
+        Check("Win+PrintScreen のキーボードフックを登録できる", () =>
+        {
+            using var manager = new HotKeyManager();
+            var registration = manager.Register(
+                "ワークスペース",
+                () => { },
+                [new HotKeySpec(HotKeyModifiers.Win, HotKeySpec.VkSnapshot)]);
+
+            report.AppendLine($"       登録: {registration.DisplayKeys} / 成功: {registration.Succeeded}");
+            return registration.Succeeded && registration.DisplayKeys == "Win+PrintScreen";
         });
 
         report.AppendLine();
