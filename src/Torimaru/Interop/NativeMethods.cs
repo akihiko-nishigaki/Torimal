@@ -28,8 +28,17 @@ internal static class NativeMethods
     public const uint MOD_NOREPEAT = 0x4000;
 
     public const uint VK_SNAPSHOT = 0x2C;
+    public const uint VK_SHIFT = 0x10;
+    public const uint VK_CONTROL = 0x11;
+    public const uint VK_MENU = 0x12;
     public const int VK_LWIN = 0x5B;
     public const int VK_RWIN = 0x5C;
+    public const uint VK_LSHIFT = 0xA0;
+    public const uint VK_RSHIFT = 0xA1;
+    public const uint VK_LCONTROL = 0xA2;
+    public const uint VK_RCONTROL = 0xA3;
+    public const uint VK_LMENU = 0xA4;
+    public const uint VK_RMENU = 0xA5;
 
     [StructLayout(LayoutKind.Sequential)]
     public struct KBDLLHOOKSTRUCT

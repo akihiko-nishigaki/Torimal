@@ -528,16 +528,25 @@ public static class SelfCheck
             }
         });
 
-        Check("Win+PrintScreen のキーボードフックを登録できる", () =>
+        Check("PrintScreen 単体と Win+PrintScreen のフックを登録できる", () =>
         {
             using var manager = new HotKeyManager();
+            var region = manager.Register(
+                "範囲キャプチャ",
+                () => { },
+                [new HotKeySpec(HotKeyModifiers.None, HotKeySpec.VkSnapshot)]);
             var registration = manager.Register(
                 "ワークスペース",
                 () => { },
                 [new HotKeySpec(HotKeyModifiers.Win, HotKeySpec.VkSnapshot)]);
 
-            report.AppendLine($"       登録: {registration.DisplayKeys} / 成功: {registration.Succeeded}");
-            return registration.Succeeded && registration.DisplayKeys == "Win+PrintScreen";
+            report.AppendLine(
+                $"       登録: {region.DisplayKeys} / {registration.DisplayKeys}"
+                + $" / 成功: {region.Succeeded && registration.Succeeded}");
+            return region.Succeeded
+                && region.DisplayKeys == "PrintScreen"
+                && registration.Succeeded
+                && registration.DisplayKeys == "Win+PrintScreen";
         });
 
         report.AppendLine();

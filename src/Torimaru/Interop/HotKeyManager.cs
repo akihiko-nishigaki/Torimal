@@ -9,8 +9,8 @@ namespace Torimaru.App.Interop;
 public sealed record HotKeyRegistration(string Name, string DisplayKeys, bool Succeeded);
 
 /// <summary>
-/// グローバルホットキーを扱う。通常の組み合わせは RegisterHotKey、
-/// OS に予約されている Win+PrintScreen は低レベルキーボードフックで受け取る。
+/// グローバルホットキーを扱う。PrintScreen 単体と Win+PrintScreen は
+/// Snipping Tool / OS の動作に先回りするため、低レベルキーボードフックで受け取る。
 /// </summary>
 public sealed class HotKeyManager : IDisposable
 {
@@ -23,8 +23,10 @@ public sealed class HotKeyManager : IDisposable
     private readonly Dispatcher _dispatcher;
     private readonly Dictionary<int, Action> _handlers = [];
     private readonly List<HotKeyRegistration> _registrations = [];
-    private NativeMethods.LowLevelKeyboardProc? _winPrintScreenProcedure;
-    private IntPtr _winPrintScreenHook;
+    private readonly HashSet<uint> _pressedOtherModifiers = [];
+    private NativeMethods.LowLevelKeyboardProc? _printScreenHookProcedure;
+    private IntPtr _printScreenHook;
+    private Action? _printScreenHandler;
     private Action? _winPrintScreenHandler;
     private bool _leftWinDown;
     private bool _rightWinDown;
@@ -64,9 +66,9 @@ public sealed class HotKeyManager : IDisposable
                 continue;
             }
 
-            if (IsWinPrintScreen(spec))
+            if (IsPrintScreenHookSpec(spec))
             {
-                if (!RegisterWinPrintScreen(handler))
+                if (!RegisterPrintScreenHook(spec, handler))
                 {
                     continue;
                 }
@@ -114,14 +116,16 @@ public sealed class HotKeyManager : IDisposable
 
         _handlers.Clear();
 
-        if (_winPrintScreenHook != IntPtr.Zero)
+        if (_printScreenHook != IntPtr.Zero)
         {
-            NativeMethods.UnhookWindowsHookEx(_winPrintScreenHook);
-            _winPrintScreenHook = IntPtr.Zero;
+            NativeMethods.UnhookWindowsHookEx(_printScreenHook);
+            _printScreenHook = IntPtr.Zero;
         }
 
-        _winPrintScreenProcedure = null;
+        _printScreenHookProcedure = null;
+        _printScreenHandler = null;
         _winPrintScreenHandler = null;
+        _pressedOtherModifiers.Clear();
         _leftWinDown = false;
         _rightWinDown = false;
         _suppressPrintScreen = false;
@@ -137,7 +141,7 @@ public sealed class HotKeyManager : IDisposable
             return false;
         }
 
-        if (IsWinPrintScreen(spec))
+        if (IsPrintScreenHookSpec(spec))
         {
             var hook = NativeMethods.SetWindowsHookEx(
                 NativeMethods.WH_KEYBOARD_LL,
@@ -161,41 +165,63 @@ public sealed class HotKeyManager : IDisposable
         return true;
     }
 
-    private static bool IsWinPrintScreen(HotKeySpec spec)
-        => spec.Modifiers == HotKeyModifiers.Win
-            && spec.VirtualKey == (int)NativeMethods.VK_SNAPSHOT;
+    private static bool IsPrintScreenHookSpec(HotKeySpec spec)
+        => spec.VirtualKey == (int)NativeMethods.VK_SNAPSHOT
+            && spec.Modifiers is HotKeyModifiers.None or HotKeyModifiers.Win;
 
-    private bool RegisterWinPrintScreen(Action handler)
+    private bool RegisterPrintScreenHook(HotKeySpec spec, Action handler)
     {
-        _winPrintScreenHandler = handler;
-        _winPrintScreenProcedure = LowLevelKeyboardHook;
-        _winPrintScreenHook = NativeMethods.SetWindowsHookEx(
-            NativeMethods.WH_KEYBOARD_LL,
-            _winPrintScreenProcedure,
-            IntPtr.Zero,
-            0);
-
-        if (_winPrintScreenHook != IntPtr.Zero)
+        if (_printScreenHook == IntPtr.Zero)
         {
-            return true;
+            _printScreenHookProcedure = LowLevelKeyboardHook;
+            _printScreenHook = NativeMethods.SetWindowsHookEx(
+                NativeMethods.WH_KEYBOARD_LL,
+                _printScreenHookProcedure,
+                IntPtr.Zero,
+                0);
+
+            if (_printScreenHook == IntPtr.Zero)
+            {
+                _printScreenHookProcedure = null;
+                return false;
+            }
         }
 
-        _winPrintScreenProcedure = null;
-        _winPrintScreenHandler = null;
-        return false;
+        if (spec.Modifiers == HotKeyModifiers.Win)
+        {
+            _winPrintScreenHandler = handler;
+        }
+        else
+        {
+            _printScreenHandler = handler;
+        }
+
+        return true;
     }
 
     private IntPtr LowLevelKeyboardHook(int code, IntPtr wParam, IntPtr lParam)
     {
-        if (code < 0 || _winPrintScreenHandler is null)
+        if (code < 0 || (_printScreenHandler is null && _winPrintScreenHandler is null))
         {
-            return NativeMethods.CallNextHookEx(_winPrintScreenHook, code, wParam, lParam);
+            return NativeMethods.CallNextHookEx(_printScreenHook, code, wParam, lParam);
         }
 
         var message = wParam.ToInt32();
         var key = Marshal.PtrToStructure<NativeMethods.KBDLLHOOKSTRUCT>(lParam).vkCode;
         var isDown = message is NativeMethods.WM_KEYDOWN or NativeMethods.WM_SYSKEYDOWN;
         var isUp = message is NativeMethods.WM_KEYUP or NativeMethods.WM_SYSKEYUP;
+
+        if (IsOtherModifier(key))
+        {
+            if (isDown)
+            {
+                _pressedOtherModifiers.Add(key);
+            }
+            else if (isUp)
+            {
+                _pressedOtherModifiers.Remove(key);
+            }
+        }
 
         if (key == NativeMethods.VK_LWIN)
         {
@@ -216,25 +242,54 @@ public sealed class HotKeyManager : IDisposable
 
             if ((isDown || isUp) && (_leftWinDown || _rightWinDown))
             {
-                if (!_suppressPrintScreen)
+                if (_pressedOtherModifiers.Count == 0)
+                {
+                    if (!_suppressPrintScreen && _winPrintScreenHandler is { } winHandler)
+                    {
+                        _suppressPrintScreen = true;
+                        _dispatcher.BeginInvoke(new Action(() => InvokeHandler(winHandler)));
+                    }
+
+                    if (_suppressPrintScreen)
+                    {
+                        if (isUp)
+                        {
+                            _suppressPrintScreen = false;
+                        }
+
+                        // Windows 側のスクリーンショット動作に渡さず、Torimaru で処理する。
+                        return new IntPtr(1);
+                    }
+                }
+            }
+            else if ((isDown || isUp) && _pressedOtherModifiers.Count == 0)
+            {
+                if (!_suppressPrintScreen && _printScreenHandler is { } printScreenHandler)
                 {
                     _suppressPrintScreen = true;
-                    var handler = _winPrintScreenHandler;
-                    _dispatcher.BeginInvoke(new Action(() => InvokeHandler(handler)));
+                    _dispatcher.BeginInvoke(new Action(() => InvokeHandler(printScreenHandler)));
                 }
 
-                if (isUp)
+                if (_suppressPrintScreen)
                 {
-                    _suppressPrintScreen = false;
-                }
+                    if (isUp)
+                    {
+                        _suppressPrintScreen = false;
+                    }
 
-                // Windows 側のスクリーンショット動作に渡さず、Torimaru で処理する。
-                return new IntPtr(1);
+                    // Windows 側の Snipping Tool に渡さず、範囲キャプチャで処理する。
+                    return new IntPtr(1);
+                }
             }
         }
 
-        return NativeMethods.CallNextHookEx(_winPrintScreenHook, code, wParam, lParam);
+        return NativeMethods.CallNextHookEx(_printScreenHook, code, wParam, lParam);
     }
+
+    private static bool IsOtherModifier(uint key)
+        => key is NativeMethods.VK_SHIFT or NativeMethods.VK_LSHIFT or NativeMethods.VK_RSHIFT
+            or NativeMethods.VK_CONTROL or NativeMethods.VK_LCONTROL or NativeMethods.VK_RCONTROL
+            or NativeMethods.VK_MENU or NativeMethods.VK_LMENU or NativeMethods.VK_RMENU;
 
     private static IntPtr ProbeHook(int code, IntPtr wParam, IntPtr lParam)
         => NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
@@ -252,7 +307,7 @@ public sealed class HotKeyManager : IDisposable
         }
         catch (Exception ex)
         {
-            AppLog.Error("Win+PrintScreen の処理で例外", ex);
+            AppLog.Error("PrintScreen ホットキー処理で例外", ex);
         }
     }
 
